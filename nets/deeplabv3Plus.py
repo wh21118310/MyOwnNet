@@ -133,6 +133,10 @@ class ASPP(nn.Module):
 
 class DeepLab(nn.Module):
     def __init__(self, num_classes, backbone="mobilenet", pretrained=False, downsample_factor=16):
+        # ---------------------------------------------------------#
+        #   num_classes     训练自己的数据集必须要修改的自己需要的分类个数+1，如2+1
+        #   downsample_factor   下采样的倍数8、16,8下采样的倍数较小、理论上效果更好。但也要求更大的显存
+        # ---------------------------------------------------------#
         super(DeepLab, self).__init__()
         # if backbone == "xception":
         #     # ----------------------------------#
