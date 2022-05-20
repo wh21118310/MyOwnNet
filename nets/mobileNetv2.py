@@ -11,7 +11,7 @@ import math
 import torch.nn as nn
 from torch.nn import BatchNorm2d, Conv2d, ReLU6, Sequential
 
-from MyOwnNet.utils.data_process import load_url
+from utils.data_process import load_url
 
 
 def conv_bn(input, output, stride):
@@ -137,7 +137,7 @@ class MobileNetV2(nn.Module):
                 m.bias.data.zero_()
 
 
-def mobileNetv2(pretrained=False, **kwargs):
+def mobilenetv2(pretrained=False, **kwargs):
     model = MobileNetV2(n_class=1000, **kwargs)
     if pretrained:
         model.load_state_dict(load_url('https://github.com/bubbliiiing/deeplabv3-plus-pytorch/releases/download/v1.0'
@@ -147,6 +147,6 @@ def mobileNetv2(pretrained=False, **kwargs):
 
 
 if __name__ == '__main__':
-    model = MobileNetV2()
+    model = mobilenetv2()
     for i, layer in enumerate(model.features):
         print(i, layer)

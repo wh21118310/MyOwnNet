@@ -10,14 +10,14 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from mobileNetv2 import mobileNetv2
+from .mobileNetv2 import mobilenetv2
 from functools import partial
 
 
 class MobileNetv2(nn.Module):
     def __init__(self, downsample_factor=8, pretrained=False):
         super(MobileNetv2, self).__init__()
-        model = mobileNetv2(pretrained)
+        model = mobilenetv2(pretrained)
         self.features = model.features[:-1]
 
         self.total_idx = len(self.features)
@@ -153,7 +153,7 @@ class DeepLab(nn.Module):
             #   浅层特征    [128,128,24]
             #   主干部分    [30,30,320]
             # ----------------------------------#
-            self.backbone = mobileNetv2(downsample_factor=downsample_factor, pretrained=pretrained)
+            self.backbone = MobileNetv2(downsample_factor=downsample_factor, pretrained=pretrained)
             in_channels = 320
             low_level_channels = 24
         else:
