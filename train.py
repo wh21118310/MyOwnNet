@@ -6,9 +6,11 @@
 @File : train
 @Description : 
 """
+import copy
 import os
 import random
 from itertools import chain
+from os.path import join, exists
 
 import cv2
 import numpy as np
@@ -23,6 +25,7 @@ from torch.utils.data import DistributedSampler, DataLoader
 
 from nets.deeplabv3Plus import DeepLab
 from utils.arguments import get_args_parser
+from utils.callbacks import initial_logger
 from utils.data_process import weights_init, DataSetWithSupervised
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
@@ -44,10 +47,10 @@ def save_hotmaps(img, epoch, idx):
 
 
 params = get_args_parser()
-data_path = "dataset"
 pretrained = False
 model_path = ""
 '''Loading Model'''
+model_name = 'deeplabv3p'
 model = DeepLab(num_classes=2, backbone="mobilenet", pretrained=pretrained, downsample_factor=32)
 if not pretrained:
     weights_init(model)
@@ -75,13 +78,6 @@ if model_path != "":
         print("\nSuccessful Load Key:", str(load_key)[:500], "……\nSuccessful Load Key Num:", len(load_key))
         print("\nFail To Load Key:", str(no_load_key)[:500], "……\nFail To Load Key num:", len(no_load_key))
         print("\n\033[1;33;44m温馨提示，head部分没有载入是正常现象，Backbone部分没有载入是错误的。\033[0m")
-# # ----------------------------#
-# #   多卡同步Bn
-# # ----------------------------#
-# if params["sync_bn"] and params["ngpus_per_node"] > 1 and params["distributed"]:
-#     model_train = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model_train)
-# elif params["sync_bn"]:
-#     print("Sync_bn is not support in one gpu or not distributed.")
 if params["cuda"]:
     if params["distributed"]:
         model = model.cuda(params["local_rank"])
@@ -91,32 +87,73 @@ if params["cuda"]:
         cudnn.benchmark = True
         model = model.cuda()
 '''Loading Datasets'''
-TrainValImgs = "dataset/JPEGImages"
-TrainValGT = "dataset/SegmentationClass"
-train_dataset = DataSetWithSupervised(TrainValImgs, TrainValGT)
-val_dataset = DataSetWithSupervised(TrainValImgs, TrainValGT)
+data_dir = r"dataset"
+train_imgs_dir, val_imgs_dir, test_imgs_dir = join(data_dir, "train/img"), join(data_dir, "valid/img"), join(data_dir,
+                                                                                                             "test/img")
+train_labels_dir, val_labels_dir, test_labels_dir = join(data_dir, "train/gt/"), join(data_dir, "valid/gt/"), join(
+    data_dir, "test/gt/")
+train_data = DataSetWithSupervised(train_imgs_dir, train_labels_dir)
+val_data = DataSetWithSupervised(val_imgs_dir, val_labels_dir)
+test_data = DataSetWithSupervised(test_imgs_dir, test_labels_dir)
+train_data_size, valid_data_size, test_data_size = train_data.__len__(), val_data.__len__(), test_data.__len__()
 if params['distributed']:
-    train_sampler = DistributedSampler(train_dataset, shuffle=True)
-    val_sampler = DistributedSampler(val_dataset, shuffle=False)
+    train_sampler = DistributedSampler(train_data, shuffle=True)
+    val_sampler = DistributedSampler(val_data, shuffle=False)
+    test_sampler = DistributedSampler(test_data, shuffle=True)
     batch_size = params['batch_size'] // params['ngpus_per_node']
     shuffle = False
 else:
-    train_sampler = None
-    val_sampler = None
+    train_sampler, val_sampler, test_sampler = None, None, None
     shuffle = True
-train_loader = DataLoader(train_dataset, shuffle=shuffle, batch_size=params['batch_size'],
+train_loader = DataLoader(train_data, shuffle=shuffle, batch_size=params['batch_size'],
                           num_workers=params['num_workers'], sampler=train_sampler)
-val_loader = DataLoader(val_dataset, shuffle=shuffle, batch_size=params['batch_size'],
+val_loader = DataLoader(val_data, shuffle=shuffle, batch_size=params['batch_size'],
                         num_workers=params["num_workers"], sampler=val_sampler)
+test_loader = DataLoader(test_data, shuffle=shuffle, batch_size=params['batch_size'],
+                         num_workers=params["num_workers"], sampler=test_sampler)
 '''Loading Optimizer'''
 optimizer = {
-    'adam': optim.Adam(chain(model.parameters()), params['Init_lr_fit'], betas=(params["momentum"], 0.999), weight_decay=params["weight_decay"]),
-    'sgd': optim.SGD(chain(model.parameters()), params['Init_lr_fit'], momentum=params['momentum'], nesterov=True, weight_decay=params["weight_decay"])
+    'adam': optim.Adam(chain(model.parameters()), params['Init_lr_fit'], betas=(params["momentum"], 0.999),
+                       weight_decay=params["weight_decay"]),
+    'sgd': optim.SGD(chain(model.parameters()), params['Init_lr_fit'], momentum=params['momentum'], nesterov=True,
+                     weight_decay=params["weight_decay"]),
 }[params['optimizer_type']]
 ''''Loading Scheduler'''
 scheduler = {
     'cos': CosineLRScheduler(optimizer, t_initial=50, t_mul=1.0, lr_min=params['Min_lr'],
                              decay_rate=params["weight_decay"], warmup_t=0, warmup_lr_init=params['Init_lr_fit']),
     # lr = 0.05 if epoch < 30; lr= 0.005 if 30 <= epoch < 60; lr = 0.0005 if 60 <= epoch < 90
-    'steplr': StepLR(optimizer, step_size=int(params['Total_Epoch']/3), gamma=0.1)
+    'steplr': StepLR(optimizer, step_size=int(params['Total_Epoch'] / 3), gamma=0.1)
 }[params['lr_decay_type']]
+'''Loading Scaler'''
+scaler = params["scaler"]
+'''Loading criterion'''
+criterion = params["criterion"]
+'''For Epoch'''
+Init_Epoch = params["Init_Epoch"]
+Total_Epch = params["Total_Epoch"]
+save_epoch = 10  # 多少个epoch保存一次权值
+'''Save Path'''
+save_dir = './outputs'  # 权值与日志文件保存的文件夹
+save_ckpt_dir, save_log_dir = join(save_dir, 'ckpt'), join(save_dir, 'log')
+best_ckpt = join(save_ckpt_dir, 'best_model.pth')
+if not exists(save_ckpt_dir):
+    os.makedirs(save_ckpt_dir)
+if not exists(save_log_dir):
+    os.makedirs(save_log_dir)
+'''Logger'''
+logger = initial_logger(join(save_log_dir, model_name + '.log'))
+'''Main Iteration'''
+train_loss_total_epochs, valid_loss_total_epochs, epoch_lr = list(), list(), list()
+Resume = False  # used for discriminate the status from the breakpoint or start
+best_iou, best_epoch, best_mpa, epoch_start, best_mode = 0.5, 0, 0.5, Init_Epoch, copy.deepcopy(model)
+if Resume and exists(best_ckpt):
+    checkpoint = torch.load(best_ckpt)
+    model.load_state_dict(checkpoint['model'])
+    optimizer.load_state_dict(checkpoint['optimizer'])
+    start_epoch = checkpoint['epoch']
+    scheduler.load_state_dict(checkpoint['scheduler'])
+logger.info('Total Epoch:{} Training num:{}  Validation num:{}'.format(
+        Total_Epch, train_data_size, valid_data_size))
+for epoch in range(epoch_start, Total_Epch):
+
