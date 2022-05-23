@@ -214,7 +214,7 @@ if focal_loss:
 if dice_loss:
     dice = DiceLoss(mode="multiclass")
     criterion = JointLoss(first=criterion, second=dice)
-
+clip_grad = False
 # ------------------------------------------------------------------#
 #   num_workers     用于设置是否使用多线程读取数据，1代表关闭多线程。开启后会加快数据读取速度，但是会占用更多内存。Windows只可设定为0
 # ------------------------------------------------------------------#
@@ -225,7 +225,6 @@ num_workers = 0
 # ------------------------------------------------------------------#
 if fp16:
     from torch.cuda.amp import GradScaler as GradScaler
-
     scaler = GradScaler()
 else:
     scaler = None
@@ -251,7 +250,7 @@ def get_args_parser():
                     "Init_lr": Init_lr, "Min_lr": Min_lr, "lr_decay": lr_decay_type, "save_epoch": save_epoch,
                     "log_dir": save_dir, "criterion": criterion, "num_workers": num_workers,
                     "scaler": scaler, "lr_limit_max": lr_limit_max, "lr_limit_min": lr_limit_min,
-                    "Init_lr_fit": Init_lr_fit, "Min_lr_fit": Min_lr_fit}
+                    "Init_lr_fit": Init_lr_fit, "Min_lr_fit": Min_lr_fit, "clip_grad": clip_grad}
     params.update(OtherSetting)
     return params
 
