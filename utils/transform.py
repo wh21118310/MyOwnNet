@@ -6,17 +6,15 @@
 @File : transform
 @Description : 
 """
-import albumentations as A
+from albumentations import Resize, Compose
+
+# transforms = A.Compose([A.Resize(256, 256), ToTensorV2()])
 from albumentations.pytorch import ToTensorV2
-train_transform = A.Compose([
-    A.Resize(256, 256),
+
+transforms = Compose([
+    # Resize(height=256, width=256),
     ToTensorV2()
 ])
-val_transform = A.Compose([
-    A.Resize(256, 256),
-    ToTensorV2()
-])
-test_transform = A.Compose([
-    A.Resize(256, 256),
-    ToTensorV2()
-])
+# from torchvision.transforms import ToTensor
+#
+# transforms = ToTensor()

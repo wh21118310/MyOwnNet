@@ -15,9 +15,11 @@ import torch.distributed as dist
 from pytorch_toolbelt.losses import JointLoss
 from segmentation_models_pytorch.losses import *
 from torch import optim
-from torch.nn import BCELoss, MSELoss
+from torch.nn import BCELoss, MSELoss, BCEWithLogitsLoss
 
 from .data_process import DataSetWithSupervised, DataSetWithNosupervised
+
+
 # from nets.deeplabv3Plus import DeepLab
 
 
@@ -43,7 +45,6 @@ def seed_torch(seed=2021):
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
-
 
 
 def str2bool(v):
@@ -205,7 +206,7 @@ save_dir = 'logs'
 #             TverskyLoss(mode="multiclass")
 #             JaccardLoss(mode="multiclass")
 # -------------------------------------------------------------------#
-criterion = BCELoss()
+criterion = BCEWithLogitsLoss()
 focal_loss = False
 dice_loss = False
 if focal_loss:
@@ -225,6 +226,7 @@ num_workers = 0
 # ------------------------------------------------------------------#
 if fp16:
     from torch.cuda.amp import GradScaler as GradScaler
+
     scaler = GradScaler()
 else:
     scaler = None
@@ -248,7 +250,7 @@ def get_args_parser():
     # Setting the training about optimizer、scduler
     OtherSetting = {"Optimizer": optimizer_type, "momentum": momentum, "weight_decay": weight_decay,
                     "Init_lr": Init_lr, "Min_lr": Min_lr, "lr_decay": lr_decay_type, "save_epoch": save_epoch,
-                    "log_dir": save_dir, "criterion": criterion, "num_workers": num_workers,
+                    "criterion": criterion, "num_workers": num_workers,
                     "scaler": scaler, "lr_limit_max": lr_limit_max, "lr_limit_min": lr_limit_min,
                     "Init_lr_fit": Init_lr_fit, "Min_lr_fit": Min_lr_fit, "clip_grad": clip_grad}
     params.update(OtherSetting)

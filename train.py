@@ -23,17 +23,19 @@ from torch.nn import DataParallel
 from torch.nn.parallel import DistributedDataParallel
 from torch.nn.utils import clip_grad_norm_
 from torch.optim.lr_scheduler import StepLR
-from torch.utils.data import DistributedSampler, DataLoader
+from torch.utils.data import DistributedSampler, DataLoader, RandomSampler, SequentialSampler
 from tqdm import tqdm
 
+from nets.convnext import convnext_tiny, ConvNeXt_For_Seg
 from nets.deeplabv3Plus import DeepLab
 from utils.arguments import get_args_parser
 from utils.callbacks import initial_logger, AverageMeter
 from utils.data_process import weights_init, DataSetWithSupervised
 from utils.get_metric import binary_accuracy, Acc, FWIoU, smooth
-from utils.transform import train_transform, val_transform, test_transform
+from utils.transform import transforms
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 
 
 def tensor2img(tensor):
@@ -44,7 +46,7 @@ def tensor2img(tensor):
     return image
 
 
-def save_hotmaps(img, epoch, idx):
+def save_hotmpas(img, epoch, idx):
     save_path = "../epochs/output_img"
     save_name = str(epoch) + "_" + str(idx) + "_cam.jpg"
     save_name = os.path.join(save_path, save_name)
@@ -56,8 +58,9 @@ pretrained = False
 model_path = ""
 
 '''Loading Model'''
-model_name = 'deeplabv3p'
-model = DeepLab(num_classes=2, backbone="mobilenet", pretrained=pretrained, downsample_factor=32)
+model_name = 'ConvNeXt'
+# model = DeepLab(num_classes=2, backbone="mobilenet", pretrained=pretrained, downsample_factor=32)
+model = ConvNeXt_For_Seg(3, 3)
 Cuda, local_rank, distributed, device, GPU_Count = params['cuda'], params['local_rank'], params["distributed"], params[
     "device"], params["GPU_Count"]
 clip_grad = params["clip_grad"]
@@ -70,7 +73,7 @@ if model_path != "":
     #   根据预训练权重的Key和模型的Key进行加载
     # ------------------------------------------------------#
     model_dict = model.state_dict()
-    pretrained_dict = torch.load(model_path, map_location=params["device"])
+    pretrained_dict = torch.load(model_path, mpa_location=params["device"])
     load_key, no_load_key, temp_dict = [], [], {}
     for k, v in pretrained_dict.items():
         if k in model_dict.keys() and np.shape(model_dict[k]) == np.shape(v):
@@ -101,11 +104,11 @@ batch_size, num_workers = params['batch_size'], params['num_workers']
 data_dir = r"dataset"
 train_imgs_dir, val_imgs_dir, test_imgs_dir = join(data_dir, "train/img"), join(data_dir, "valid/img"), join(data_dir,
                                                                                                              "test/img")
-train_labels_dir, val_labels_dir, test_labels_dir = join(data_dir, "train/gt/"), join(data_dir, "valid/gt/"), join(
-    data_dir, "test/gt/")
-train_data = DataSetWithSupervised(train_imgs_dir, train_labels_dir, tfs=train_transform)
-val_data = DataSetWithSupervised(val_imgs_dir, val_labels_dir, tfs=val_transform)
-test_data = DataSetWithSupervised(test_imgs_dir, test_labels_dir, tfs=test_transform)
+train_labels_dir, val_labels_dir, test_labels_dir = join(data_dir, "train/gt"), join(data_dir, "valid/gt"), join(
+    data_dir, "test/gt")
+train_data = DataSetWithSupervised(train_imgs_dir, train_labels_dir, transforms)
+val_data = DataSetWithSupervised(val_imgs_dir, val_labels_dir, transforms)
+test_data = DataSetWithSupervised(test_imgs_dir, test_labels_dir, transforms)
 train_data_size, valid_data_size, test_data_size = train_data.__len__(), val_data.__len__(), test_data.__len__()
 if distributed:
     train_sampler = DistributedSampler(train_data, shuffle=True)
@@ -114,6 +117,9 @@ if distributed:
     batch_size = batch_size // GPU_Count
     shuffle = False
 else:
+    # train_sampler = RandomSampler(train_data)
+    # val_sampler = SequentialSampler(val_data)
+    # test_sampler = SequentialSampler(test_data)
     train_sampler, val_sampler, test_sampler = None, None, None
     shuffle = True
 train_loader = DataLoader(train_data, shuffle=shuffle, batch_size=batch_size,
@@ -168,9 +174,9 @@ train_loss_total_epochs, valid_loss_total_epochs, epoch_lr = list(), list(), lis
 
 Resume = False  # used for discriminate the status from the breakpoint or start
 
-best_iou, best_epoch, best_mAP, epoch_start, best_mode = 0.5, 0, 0.5, Init_Epoch, copy.deepcopy(model)
+best_iou, best_epoch, best_mpa, epoch_start, best_mode = 0, 0, 0, Init_Epoch, copy.deepcopy(model)
 
-save_inter, min_inter = 50, 10  # 用来存模型
+save_inter, min_inter = 100, 0  # 用来存模型
 
 # support for the restart from breakpoint
 if Resume and exists(best_ckpt):
@@ -191,8 +197,13 @@ for epoch in range(epoch_start, Total_epoch):
     train_bar = tqdm(train_loader)
     for batch_idx, (image, label) in enumerate(train_bar):
         optimizer.zero_grad(set_to_none=True)
+        torch.cuda.empty_cache()
         if Cuda:
-            image, label = image.cuda(local_rank), label.cuda(local_rank)
+            image = image.cuda(local_rank)
+            image = image.to(dtype=torch.float32)
+            label = label.cuda(local_rank)
+            label = label.to(dtype=torch.float32)
+            # label = label.unsqueeze(1)
         if scaler is None:
             outputs = model(image)
             loss = criterion(outputs, label)
@@ -205,62 +216,72 @@ for epoch in range(epoch_start, Total_epoch):
                 outputs = model(image)
                 loss = criterion(outputs, label)
             scaler.scale(loss).backward()
+            if clip_grad:
+                clip_grad_norm_(model.parameters(), max_norm=10, norm_type=2)
             scaler.step(optimizer)
             scaler.update()
+        optimizer.zero_grad(set_to_none=True)
         scheduler.step(epoch + batch_idx / trainLoader_size)  # called after every batch update
         train_main_loss.update(loss.cpu().detach().numpy())
-        train_bar.set_description(desc='[train] epoch:{} iter:{}/{} {:.2f}% lr:{:.6f} loss:{:.6f}'.format(
-            epoch, batch_idx, trainLoader_size, batch_idx / trainLoader_size * 100,
-            optimizer.param_groups[-1]['lr'], train_main_loss.average()))
+        train_bar.set_description(desc='[train] epoch:{} iter:{}/{} lr:{:.4f} loss:{:.4f}'.format(
+            epoch, batch_idx+1, trainLoader_size, optimizer.param_groups[-1]['lr'], train_main_loss.average()))
+        if batch_idx + 1 == trainLoader_size:
+            logger.info('[train] epoch:{} iter:{}/{} lr:{:.4f} loss:{:.4f}'.format(
+                epoch, batch_idx, trainLoader_size, optimizer.param_groups[-1]['lr'], train_main_loss.average()))
 
     model.eval()
     val_bar = tqdm(val_loader)
     val_loss = AverageMeter()
     acc_meter = AverageMeter()
     fwIoU_meter = AverageMeter()
-    mAP_meter = AverageMeter()
+    mpa_meter = AverageMeter()
     with torch.no_grad():
         for batch_idx, (image, label) in enumerate(val_bar):
             if Cuda:
                 image = image.cuda(local_rank)
                 label = label.cuda(local_rank)
+                image = image.to(dtype=torch.float32)
+                label = label.to(dtype=torch.float32)
             outputs = model(image)
             loss = criterion(outputs, label)
             val_loss.update(loss.cpu().detach().numpy())
-            val_bar.set_description(desc='[val] epoch:{} iter:{}/{} {:.2f}% loss:{:.6f}'.format(
-                epoch, batch_idx, valLoader_size, batch_idx / valLoader_size * 100, val_loss.average()))
+            val_bar.set_description(desc='[val] epoch:{} iter:{}/{} loss:{:.4f}'.format(
+                epoch, batch_idx+1, valLoader_size, batch_idx / valLoader_size * 100, val_loss.average()))
+            if batch_idx + 1 == valLoader_size:
+                logger.info('[val] epoch:{} iter:{}/{} loss:{:.4f}'.format(
+                    epoch, batch_idx, valLoader_size, val_loss.average()))
             '''以下部分由于数据集的图片是二分类图像，故采用以下方式处理'''
-            outputs = torch.sigmoid(outputs)
+            # outputs = torch.sigmoid(outputs)
             outputs = torch.where(outputs > 0.5, torch.ones_like(outputs), torch.zeros_like(outputs))
-            outputs = outputs.cpu().data.numpy()
+            outputs = outputs.cpu().detach().numpy()
             for (outputs, target) in zip(outputs, label):
                 acc, valid_sum = binary_accuracy(outputs, target)
-                mAP = Acc(outputs.squeeze(), target.cpu().squeeze(), ignore_zero=True)
+                mpa = Acc(outputs.squeeze(), target.cpu().squeeze(), ignore_zero=True)
                 fwiou = FWIoU(outputs.squeeze(), target.cpu().squeeze(), ignore_zero=True)
                 acc_meter.update(acc)
-                mAP_meter.update(mAP)
+                mpa_meter.update(mpa)
                 fwIoU_meter.update(fwiou)
     # save loss & lr
     train_loss_total_epochs.append(train_main_loss.avg)
-    valid_loss_total_epochs.append(val_loss.avg)
-    epoch_lr.append(optimizer.param_groups[0]['lr'])
+    valid_loss_total_epochs.append(val_loss.average())
+    epoch_lr.append(optimizer.param_groups[-1]['lr'])
     # save Model
-    if fwIoU_meter.avg > best_iou or (epoch % save_inter == 0 and epoch > min_inter):
-        state = {'epoch': epoch, 'model': model.state_dict(), 'optimizer': optimizer.load_state_dict()}
+    if fwIoU_meter.average() > best_iou or epoch == 0 or (epoch % save_inter == 0 and epoch > min_inter):
+        state = {'epoch': epoch, 'model': model.state_dict(), 'optimizer': optimizer.state_dict()}
         filename = join(save_ckpt_dir, 'ckpt-epoch{}_fwiou{:.2f}.pth'.format(epoch, fwIoU_meter.avg * 100))
         torch.save(state, filename, _use_new_zipfile_serialization=False)
-        if fwIoU_meter.avg > best_iou:
+        if fwIoU_meter.average() > best_iou:
             best_filename = join(save_ckpt_dir, 'best_model.pth')
             torch.save(state, best_filename, _use_new_zipfile_serialization=False)
-            best_iou = fwIoU_meter.avg
+            best_iou = fwIoU_meter.average()
             best_mode = copy.deepcopy(model)
             best_epoch = epoch
-            logger.info('[save] Best Model saved at epoch:{} ============================='.format(epoch))
-    if mAP_meter.avg > best_mAP:
-        best_mAP = mAP_meter.avg
+            logger.info('[save] Best Model saved at epoch:{}'.format(epoch))
+    if mpa_meter.average() > best_mpa:
+        best_mpa = mpa_meter.average()
     # 显示loss
-    print('best_epoch:', best_epoch, 'nowIoU:', fwIoU_meter.average() * 100, 'bestIoU:',
-          best_iou * 100, 'nowMAP:', mAP_meter.average() * 100, 'bestMAP:', best_mAP * 100)
+    print("best_epoch:{}, nowIoU: {:.4f}, bestIoU:{:.4f}, now_mPA:{:.4f}, best_mPA:{:.4f}"
+          .format(best_epoch, fwIoU_meter.average() * 100, best_iou * 100, mpa_meter.average() * 100, best_mpa * 100))
 if plot:
     x = [i for i in range(Total_epoch)]
     fig = plt.figure(figsize=(12, 4))
@@ -273,11 +294,10 @@ if plot:
     ax.grid(True)
     plt.legend(loc='upper right', fontsize=15)
     ax = fig.add_subplot(1, 2, 2)
-    ax.plot(x, epoch_lr,  label='Learning Rate')
+    ax.plot(x, epoch_lr, label='Learning Rate')
     ax.set_xlabel('Epoch', fontsize=15)
     ax.set_ylabel('Learning Rate', fontsize=15)
     ax.set_title('lr curve', fontsize=15)
     ax.grid(True)
     plt.legend(loc='upper right', fontsize=15)
     plt.show()
-

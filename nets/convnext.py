@@ -12,6 +12,7 @@ import torch.nn.functional as F
 from einops import rearrange
 from timm.models.layers import trunc_normal_, DropPath
 from timm.models.registry import register_model
+from torchsummary import summary
 
 
 class LayerNorm(nn.Module):
@@ -63,6 +64,7 @@ class Block(nn.Module):
         self.pwconv2 = nn.Linear(4 * dim, dim)
         self.gamma = nn.Parameter(layer_scale_init_value * torch.ones(dim),
                                   requires_grad=True) if layer_scale_init_value > 0 else None
+        # Regularization
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
 
     def forward(self, x):
@@ -100,12 +102,13 @@ class ConvNeXt(nn.Module):
     def __init__(self, in_chans=3, depths=[3, 3, 9, 3], dims=[96, 192, 384, 768],
                  drop_path_rate=0., layer_scale_init_value=1e-6, out_indices=[0, 1, 2, 3]):
         super().__init__()
-
         self.downsample_layers = nn.ModuleList()  # stem and 3 intermediate downsampling conv layers
+        # stem layers are the 4x4 Conv with stride=4 in transformer, replacing the Pooling in ResNet
         stem = nn.Sequential(
             nn.Conv2d(in_chans, dims[0], kernel_size=4, stride=4),
             LayerNorm(dims[0], eps=1e-6, data_format="channels_first")
         )
+        # 3 downsample in stage2-stage4
         self.downsample_layers.append(stem)
         for i in range(3):
             downsample_layer = nn.Sequential(
@@ -125,6 +128,8 @@ class ConvNeXt(nn.Module):
             self.stages.append(stage)
             cur += depths[i]
 
+        self.out_indices = out_indices
+        # These blocks are used for classifying
         norm_layer = partial(LayerNorm, eps=1e-6, data_format="channels_first")
         for i_layer in range(4):
             layer = norm_layer(dims[i_layer])
@@ -137,22 +142,87 @@ class ConvNeXt(nn.Module):
             trunc_normal_(m.weight, std=.02)
             nn.init.constant_(m.bias, 0)
 
-    # def forward_features(self, x):
-    #     for i in range(4):
-    #         x = self.downsample_layers[i](x)
-    #         x = self.stages[i](x)
-    #     return self.norm(x.mean([-2, -1]))  # global average pooling, (N, C, H, W) -> (N, C)
+    def init_weights(self, pretrained=None):
+        """Initialize the weights in backbone.
+        Args:
+            pretrained (str, optional): Path to pre-trained weights.
+                Defaults to None.
+        """
+
+        def _init_weights(m):
+            if isinstance(m, nn.Linear):
+                trunc_normal_(m.weight, std=.02)
+                if isinstance(m, nn.Linear) and m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.LayerNorm):
+                nn.init.constant_(m.bias, 0)
+                nn.init.constant_(m.weight, 1.0)
+
+        if pretrained is None:
+            self.apply(_init_weights)
+        else:
+            raise TypeError('pretrained must be a str or None')
 
     def forward(self, x):
         outs = []
         for i in range(4):
-            x = self.downsample_layers[i](x)
+            x = self.downsample_layers[i](x)  # (b, 96, 128, 128)->(b, 192, 64, 64)->(b, 384, 32, 32)->(4, 768, 16, 16)
             x = self.stages[i](x)
             if i in self.out_indices:
                 norm_layer = getattr(self, f'norm{i}')
                 x_out = norm_layer(x)
                 outs.append(x_out)
         x = tuple(outs)
+        return x
+
+
+# a Simple Decoder
+class UperDecoder(nn.Module):
+    def __init__(self, out_chans=3, dims=[96, 192, 384, 768]):
+        super(UperDecoder, self).__init__()
+        self.C4 = nn.Sequential(
+            nn.ConvTranspose2d(dims[3], dims[2], 4, 2, 1),
+            LayerNorm(dims[2], eps=1e-6, data_format='channels_first'),
+            nn.GELU()
+        )
+        self.C3 = nn.Sequential(
+            nn.ConvTranspose2d(dims[2], dims[1], 4, 2, 1),
+            LayerNorm(dims[1], eps=1e-6, data_format='channels_first'),
+            nn.GELU()
+        )
+        self.C2 = nn.Sequential(
+            nn.ConvTranspose2d(dims[1], dims[0], 4, 2, 1),
+            LayerNorm(dims[0], eps=1e-6, data_format='channels_first'),
+            nn.GELU()
+        )
+        self.out = nn.Sequential(
+            nn.ConvTranspose2d(dims[0], out_channels=out_chans, kernel_size=8, stride=4, padding=2, bias=False),
+            LayerNorm(out_chans, eps=1e-6, data_format='channels_first'),
+            nn.Softmax(dim=1)
+        )
+
+    def forward(self, x):
+        assert isinstance(x, tuple) is True, "input is None"
+        x1, x2, x3, x4 = x[:]  # x1: (4，96，128，128);x2:(4,192,64,64);x3:(4,384,32,32);x4:(4,768,16,16)
+        x4_d = self.C4(x4)
+        x3 += x4_d
+        x3_d = self.C3(x3)
+        x2 += x3_d
+        x2_d = self.C2(x2)
+        x1 += x2_d
+        result = self.out(x1)
+        return result
+
+
+class ConvNeXt_For_Seg(nn.Module):
+    def __init__(self, in_channels=3, out_channels=3, depths=[3, 3, 9, 3], dims=[96, 192, 384, 768]):
+        super(ConvNeXt_For_Seg, self).__init__()
+        self.encoder = ConvNeXt(in_chans=in_channels, depths=depths, dims=dims)
+        self.decoder = UperDecoder(out_chans=out_channels, dims=dims)
+
+    def forward(self, x):
+        x = self.encoder(x)
+        x = self.decoder(x)
         return x
 
 
@@ -218,3 +288,15 @@ def convnext_xlarge(pretrained=False, in_22k=False, **kwargs):
         checkpoint = torch.hub.load_state_dict_from_url(url=url, map_location="cpu")
         model.load_state_dict(checkpoint["model"])
     return model
+
+
+if __name__ == '__main__':
+    data = torch.rand((4, 3, 512, 512))
+    model = ConvNeXt()
+    # result = summary(model, data.size())
+    # print(result)
+    with torch.no_grad():
+        out = model(data)
+    down = UperDecoder()
+    result = down(out)
+    print(result)

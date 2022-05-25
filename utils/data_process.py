@@ -52,22 +52,17 @@ from torch.utils import model_zoo
 
 
 class DataSetWithSupervised(Dataset):
-    def __init__(self, imgs_dir, labels_dir, tfs=None):
+    def __init__(self, imgs_dir, labels_dir, transform=None):
         self.imgs_dir = imgs_dir
         self.labels_dir = labels_dir
-        self.transform = tfs
-        try:
-            self.imgs_path = glob(os.path.join(self.imgs_dir, "*.png"))
-        except Exception:
-            self.imgs_path = glob(os.path.join(self.imgs_dir, "*.jpg"))
-        try:
-            self.labels_path = glob(os.path.join(self.labels_dir, ".png"))
-        except Exception:
-            self.labels_path = glob(os.path.join(self.labels_dir, "*.jpg"))
-        self.ids = [os.path.splitext(file)[0] for file in os.listdir(imgs_dir)
+        self.transform = transform
+
+        self.imgs_path = glob(os.path.join(self.imgs_dir, "*.png"))
+        self.labels_path = glob(os.path.join(self.labels_dir, "*.png"))
+        assert len(self.labels_path) == len(self.imgs_path), "The numbers of labels is not compared to images"
+        self.ids = [os.path.splitext(file)[0] for file in self.imgs_path
                     if not file.startswith('.')]
         logging.info(f'Creating dataset with {len(self.ids)} examples')
-        self.useOneDim = False
 
     def __len__(self):
         return len(self.ids)
@@ -78,16 +73,21 @@ class DataSetWithSupervised(Dataset):
         # get the label correspond to the image
         label_path = self.labels_path[idx]
         # read the image and label
-        image = cv2.imread(image_path)
-        label = cv2.imread(label_path)
+        img = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
+        image = img.transpose(2, 0, 1)
+        label = cv2.imread(label_path, cv2.IMREAD_UNCHANGED)
+        mask = label.transpose(2, 0, 1)
         # if want the result to get the 1d image
-        if self.useOneDim:
-            label = cv2.cvtColor(label, cv2.COLOR_BGR2RGB)
-        if self.transform is not None:
-            image = self.transform(image=image)
-            label = self.transform(image=label)
-            label /= 255
-        return image, label
+        # mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+        if self.transform:
+            transformed = self.transform(image=img, mask=mask)
+            transformed_image = transformed['image']
+            transformed_mask = transformed['mask']
+            # transformed_image = self.transform(img)
+            # transformed_mask = self.transform(label)
+            return transformed_image, transformed_mask
+        else:
+            return image, mask
 
 
 class DataSetWithNosupervised(Dataset):

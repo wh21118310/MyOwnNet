@@ -116,9 +116,6 @@ class ASPP(nn.Module):
         # -----------------------------------------#
         global_feature = torch.mean(x, 2, True)
         global_feature = torch.mean(global_feature, 3, True)
-        # global_feature = self.branch5_conv(global_feature)
-        # global_feature = self.branch5_bn(global_feature)
-        # global_feature = self.branch5_relu(global_feature)
         global_feature = self.branch5(global_feature)
         global_feature = F.interpolate(input=global_feature, size=(row, col), scale_factor=None, mode='bilinear', align_corners=True)
 
