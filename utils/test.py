@@ -6,11 +6,10 @@
 @File : test
 @Description : 
 """
-import os
-
-import torch
-
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
-device_num = len(os.environ["CUDA_VISIBLE_DEVICES"].split(','))
-print(device_num)
-print(os.environ['LOCAL_RANK'])
+import cv2
+import torchvision.transforms
+image = cv2.imread(r"..\dataset\train\img\1.png")
+label = cv2.imread(r"..\dataset\train\gt\1.png")
+Tensor = torchvision.transforms.ToTensor()
+image = Tensor(image)
+print(image.shape)

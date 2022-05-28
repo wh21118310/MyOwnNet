@@ -23,11 +23,9 @@ from torch.nn import DataParallel
 from torch.nn.parallel import DistributedDataParallel
 from torch.nn.utils import clip_grad_norm_
 from torch.optim.lr_scheduler import StepLR
-from torch.utils.data import DistributedSampler, DataLoader, RandomSampler, SequentialSampler
+from torch.utils.data import DistributedSampler, DataLoader
 from tqdm import tqdm
-
-from nets.convnext import convnext_tiny, ConvNeXt_For_Seg
-from nets.deeplabv3Plus import DeepLab
+from nets.convnext import ConvNeXt_For_Seg
 from utils.arguments import get_args_parser
 from utils.callbacks import initial_logger, AverageMeter
 from utils.data_process import weights_init, DataSetWithSupervised
@@ -123,11 +121,11 @@ else:
     train_sampler, val_sampler, test_sampler = None, None, None
     shuffle = True
 train_loader = DataLoader(train_data, shuffle=shuffle, batch_size=batch_size,
-                          num_workers=num_workers, sampler=train_sampler)
+                          num_workers=num_workers, sampler=train_sampler, pin_memory=True)
 val_loader = DataLoader(val_data, shuffle=shuffle, batch_size=batch_size,
-                        num_workers=num_workers, sampler=val_sampler)
+                        num_workers=num_workers, sampler=val_sampler, pin_memory=True)
 test_loader = DataLoader(test_data, shuffle=shuffle, batch_size=batch_size,
-                         num_workers=num_workers, sampler=test_sampler)
+                         num_workers=num_workers, sampler=test_sampler, pin_memory=True)
 trainLoader_size, valLoader_size, testLoader_size = len(train_loader), len(val_loader), len(test_loader)
 '''For Epoch'''
 Init_Epoch = params["Init_Epoch"]
@@ -195,15 +193,13 @@ for epoch in range(epoch_start, Total_epoch):
     model.train()
     train_main_loss = AverageMeter()
     train_bar = tqdm(train_loader)
-    for batch_idx, (image, label) in enumerate(train_bar):
+    for batch_idx, (image, label) in enumerate(train_bar, start=1):
         optimizer.zero_grad(set_to_none=True)
-        torch.cuda.empty_cache()
         if Cuda:
             image = image.cuda(local_rank)
-            image = image.to(dtype=torch.float32)
+            image = image.to(dtype=torch.float32, non_blocking=True)
             label = label.cuda(local_rank)
-            label = label.to(dtype=torch.float32)
-            # label = label.unsqueeze(1)
+            label = label.to(dtype=torch.float32, non_blocking=True)
         if scaler is None:
             outputs = model(image)
             loss = criterion(outputs, label)
@@ -221,11 +217,12 @@ for epoch in range(epoch_start, Total_epoch):
             scaler.step(optimizer)
             scaler.update()
         optimizer.zero_grad(set_to_none=True)
+        torch.cuda.empty_cache()
         scheduler.step(epoch + batch_idx / trainLoader_size)  # called after every batch update
         train_main_loss.update(loss.cpu().detach().numpy())
         train_bar.set_description(desc='[train] epoch:{} iter:{}/{} lr:{:.4f} loss:{:.4f}'.format(
-            epoch, batch_idx+1, trainLoader_size, optimizer.param_groups[-1]['lr'], train_main_loss.average()))
-        if batch_idx + 1 == trainLoader_size:
+            epoch, batch_idx, trainLoader_size, optimizer.param_groups[-1]['lr'], train_main_loss.average()))
+        if batch_idx == trainLoader_size:
             logger.info('[train] epoch:{} iter:{}/{} lr:{:.4f} loss:{:.4f}'.format(
                 epoch, batch_idx, trainLoader_size, optimizer.param_groups[-1]['lr'], train_main_loss.average()))
 
@@ -236,28 +233,28 @@ for epoch in range(epoch_start, Total_epoch):
     fwIoU_meter = AverageMeter()
     mpa_meter = AverageMeter()
     with torch.no_grad():
-        for batch_idx, (image, label) in enumerate(val_bar):
+        for batch_idx, (image, label) in enumerate(val_bar, start=1):
             if Cuda:
                 image = image.cuda(local_rank)
                 label = label.cuda(local_rank)
-                image = image.to(dtype=torch.float32)
-                label = label.to(dtype=torch.float32)
+                image = image.to(dtype=torch.float32, non_blocking=True)
+                label = label.to(dtype=torch.float32, non_blocking=True)
             outputs = model(image)
             loss = criterion(outputs, label)
             val_loss.update(loss.cpu().detach().numpy())
             val_bar.set_description(desc='[val] epoch:{} iter:{}/{} loss:{:.4f}'.format(
-                epoch, batch_idx+1, valLoader_size, batch_idx / valLoader_size * 100, val_loss.average()))
-            if batch_idx + 1 == valLoader_size:
+                epoch, batch_idx, valLoader_size, val_loss.average()))
+            if batch_idx == valLoader_size:
                 logger.info('[val] epoch:{} iter:{}/{} loss:{:.4f}'.format(
-                    epoch, batch_idx, valLoader_size, val_loss.average()))
+                    epoch, batch_idx+1, valLoader_size, val_loss.average()))
             '''以下部分由于数据集的图片是二分类图像，故采用以下方式处理'''
             # outputs = torch.sigmoid(outputs)
             outputs = torch.where(outputs > 0.5, torch.ones_like(outputs), torch.zeros_like(outputs))
             outputs = outputs.cpu().detach().numpy()
             for (outputs, target) in zip(outputs, label):
                 acc, valid_sum = binary_accuracy(outputs, target)
-                mpa = Acc(outputs.squeeze(), target.cpu().squeeze(), ignore_zero=True)
-                fwiou = FWIoU(outputs.squeeze(), target.cpu().squeeze(), ignore_zero=True)
+                mpa = Acc(outputs.squeeze(), target.cpu().squeeze(), ignore_zero=False)
+                fwiou = FWIoU(outputs.squeeze(), target.cpu().squeeze(), ignore_zero=False)
                 acc_meter.update(acc)
                 mpa_meter.update(mpa)
                 fwIoU_meter.update(fwiou)

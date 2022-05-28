@@ -49,6 +49,7 @@ from torch.utils import model_zoo
 #
 #     print('initialize network with %s type' % init_type)
 #     net.apply(init_func)
+from torchvision.transforms import transforms
 
 
 class DataSetWithSupervised(Dataset):
@@ -74,20 +75,21 @@ class DataSetWithSupervised(Dataset):
         label_path = self.labels_path[idx]
         # read the image and label
         img = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
-        image = img.transpose(2, 0, 1)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         label = cv2.imread(label_path, cv2.IMREAD_UNCHANGED)
-        mask = label.transpose(2, 0, 1)
+        label = cv2.cvtColor(label, cv2.COLOR_BGR2RGB)
         # if want the result to get the 1d image
         # mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
         if self.transform:
-            transformed = self.transform(image=img, mask=mask)
+            transformed = self.transform(image=img, mask=label)
             transformed_image = transformed['image']
             transformed_mask = transformed['mask']
-            # transformed_image = self.transform(img)
-            # transformed_mask = self.transform(label)
-            return transformed_image, transformed_mask
+            return transformed_image, transformed_mask / 255
         else:
-            return image, mask
+            trans = transforms.ToTensor()
+            img = trans(img)
+            label = trans(label)
+            return img, label / 255
 
 
 class DataSetWithNosupervised(Dataset):

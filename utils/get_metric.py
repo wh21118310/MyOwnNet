@@ -6,7 +6,8 @@
 @File : get_metric
 @Description : 
 """
-from .eval_segm import frequency_weighted_IU, mean_accuracy
+# from .eval_segm import frequency_weighted_IU, mean_accuracy
+from .metrcs import SegmentationMetric
 
 
 def smooth(v, w=0.85):
@@ -27,23 +28,29 @@ def binary_accuracy(pred, label):
     return acc, valid_sum
 
 
-def FWIoU(pred, label, bn_mode=False, ignore_zero=False):
+def FWIoU(pred, label, bn_mode=False, ignore_zero=False, num_classes=3):
     if bn_mode:
         pred = (pred >= 0.5)
         label = (label >= 0.5)
     elif ignore_zero:
-        pred = pred-1
-        label = label-1
-    FWIoU = frequency_weighted_IU(pred, label)
-    return FWIoU
+        pred = pred - 1
+        label = label - 1
+    metric = SegmentationMetric(num_classes)
+    metric.addBatch(pred, label)
+    # FWIoU = frequency_weighted_IU(pred, label)
+    # return FWIoU
+    return metric.Frequency_Weighted_Intersection_over_Union()
 
 
-def Acc(pred, label, bn_mode=False, ignore_zero=False):
+def Acc(pred, label, bn_mode=False, ignore_zero=False, num_classes=3):
     if bn_mode:
         pred = (pred >= 0.5)
         label = (label >= 0.5)
     elif ignore_zero:
-        pred = pred-1
-        label = label-1
-    acc = mean_accuracy(pred, label)
-    return acc
+        pred = pred - 1
+        label = label - 1
+    # acc = mean_accuracy(pred, label)
+    # return acc
+    metric = SegmentationMetric(num_classes)
+    metric.addBatch(pred, label)
+    return metric.meanPixelAccuracy()
