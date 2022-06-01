@@ -226,72 +226,53 @@ class ConvNeXt_For_Seg(nn.Module):
         return x
 
 
-model_urls = {
-    "convnext_tiny_1k": "https://dl.fbaipublicfiles.com/convnext/convnext_tiny_1k_224_ema.pth",
-    "convnext_small_1k": "https://dl.fbaipublicfiles.com/convnext/convnext_small_1k_224_ema.pth",
-    "convnext_base_1k": "https://dl.fbaipublicfiles.com/convnext/convnext_base_1k_224_ema.pth",
-    "convnext_large_1k": "https://dl.fbaipublicfiles.com/convnext/convnext_large_1k_224_ema.pth",
-    "convnext_tiny_22k": "https://dl.fbaipublicfiles.com/convnext/convnext_tiny_22k_224.pth",
-    "convnext_small_22k": "https://dl.fbaipublicfiles.com/convnext/convnext_small_22k_224.pth",
-    "convnext_base_22k": "https://dl.fbaipublicfiles.com/convnext/convnext_base_22k_224.pth",
-    "convnext_large_22k": "https://dl.fbaipublicfiles.com/convnext/convnext_large_22k_224.pth",
-    "convnext_xlarge_22k": "https://dl.fbaipublicfiles.com/convnext/convnext_xlarge_22k_224.pth",
+params = {
+    "tiny": {
+        "depths": [3, 3, 9, 3], "dims": [96, 192, 384, 768],
+        "convnext_1k": "https://dl.fbaipublicfiles.com/convnext/convnext_tiny_1k_224_ema.pth",
+        "convnext_22k": "https://dl.fbaipublicfiles.com/convnext/convnext_tiny_22k_224.pth",
+    },
+    "small": {
+        "depths": [3, 3, 27, 3], "dims": [96, 192, 384, 768],
+        "convnext_1k": "https://dl.fbaipublicfiles.com/convnext/convnext_small_1k_224_ema.pth",
+        "convnext_22k": "https://dl.fbaipublicfiles.com/convnext/convnext_small_22k_224.pth",
+    },
+    "base": {
+        "depths": [3, 3, 9, 3], "dims": [128, 256, 512, 1024],
+        "convnext_1k": "https://dl.fbaipublicfiles.com/convnext/convnext_base_1k_224_ema.pth",
+        "convnext_22k": "https://dl.fbaipublicfiles.com/convnext/convnext_base_22k_224.pth",
+    },
+    "large": {
+        "depths": [3, 3, 27, 3], "dims": [192, 384, 768, 1536],
+        "convnext_1k": "https://dl.fbaipublicfiles.com/convnext/convnext_large_1k_224_ema.pth",
+        "convnext_22k": "https://dl.fbaipublicfiles.com/convnext/convnext_large_22k_224.pth",
+    },
+    "xlarge": {
+        "depths": [3, 3, 27, 3], "dims": [256, 512, 1024, 2048],
+        "convnext_22k": "https://dl.fbaipublicfiles.com/convnext/convnext_xlarge_22k_224.pth",
+    }
+
 }
 
+class ConvNeXt_Seg(nn.Module):
+    def __init__(self, inChannels=3, outChannels=3, pretrained=False, in_22k=False, model_type="base", **kwargs):
+        super(ConvNeXt_Seg, self).__init__()
+        self.params = params[model_type]
+        self.encoder = ConvNeXt(in_chans=inChannels, depths=self.params["depths"], dims=self.params["dims"], **kwargs)
+        self.decoder = UperDecoder(out_chans=outChannels, dims=self.params["dims"])
+        if pretrained:
+            if model_type != "xlarge":
+                url = self.params["convnext_22k"] if in_22k else self.params["convnext_1k"]
+            else:
+                assert in_22k, "only ImageNet-22K pre-trained ConvNeXt-XL is available; please set in_22k=True"
+                url = self.params["convnext_22k"]
+            checkpoint = torch.hub.load_state_dict_from_url(url=url, map_location="cpu", check_hash=True)
+            model.load_state_dict(checkpoint["backbone"], strict=False)
 
-@register_model
-def ConvNeXtForSeg_tiny(inChannels=3, outChannels=3, pretrained=False, in_22k=False, **kwargs):
-    model = ConvNeXt_For_Seg(in_channels=inChannels, out_channels=outChannels,
-                             depths=[3, 3, 9, 3], dims=[96, 192, 384, 768], **kwargs)
-    if pretrained:
-        url = model_urls['convnext_tiny_22k'] if in_22k else model_urls['convnext_tiny_1k']
-        checkpoint = torch.hub.load_state_dict_from_url(url=url, map_location="cpu", check_hash=True)
-        model.load_state_dict(checkpoint["backbone"], strict=False)
-    return model
-
-
-@register_model
-def ConvNeXtForSeg_small(inChannels=3, outChannels=3, pretrained=False, in_22k=False, **kwargs):
-    model = ConvNeXt_For_Seg(in_channels=inChannels, out_channels=outChannels,
-                             depths=[3, 3, 27, 3], dims=[96, 192, 384, 768], **kwargs)
-    if pretrained:
-        url = model_urls['convnext_small_22k'] if in_22k else model_urls['convnext_small_1k']
-        checkpoint = torch.hub.load_state_dict_from_url(url=url, map_location="cpu", check_hash=True)
-        model.load_state_dict(checkpoint["backbone"], strict=False)
-    return model
-
-@register_model
-def ConvNeXtForSeg_base(inChannels=3, outChannels=3, pretrained=False, in_22k=False, **kwargs):
-    model = ConvNeXt_For_Seg(in_channels=inChannels, out_channels=outChannels,
-                             depths=[3, 3, 9, 3], dims=[128, 256, 512, 1024], **kwargs)
-    if pretrained:
-        url = model_urls['convnext_tiny_22k'] if in_22k else model_urls['convnext_tiny_1k']
-        checkpoint = torch.hub.load_state_dict_from_url(url=url, map_location="cpu", check_hash=True)
-        model.load_state_dict(checkpoint["backbone"], strict=False)
-    return model
-
-
-@register_model
-def ConvNeXtForSeg_large(inChannels=3, outChannels=3, pretrained=False, in_22k=False, **kwargs):
-    model = ConvNeXt_For_Seg(in_channels=inChannels, out_channels=outChannels,
-                             depths=[3, 3, 27, 3], dims=[192, 384, 768, 1536], **kwargs)
-    if pretrained:
-        url = model_urls['convnext_large_22k'] if in_22k else model_urls['convnext_large_1k']
-        checkpoint = torch.hub.load_state_dict_from_url(url=url, map_location="cpu")
-        model.load_state_dict(checkpoint["backbone"], strict=False)
-    return model
-
-
-@register_model
-def ConvNeXtForSeg_xlarge(inChannels=3, outChannels=3, pretrained=False, in_22k=False, **kwargs):
-    model = ConvNeXt_For_Seg(in_channels=inChannels, out_channels=outChannels,
-                     depths=[3, 3, 27, 3], dims=[256, 512, 1024, 2048], **kwargs)
-    if pretrained:
-        assert in_22k, "only ImageNet-22K pre-trained ConvNeXt-XL is available; please set in_22k=True"
-        url = model_urls['convnext_xlarge_22k']
-        checkpoint = torch.hub.load_state_dict_from_url(url=url, map_location="cpu")
-        model.load_state_dict(checkpoint["backbone"], strict=False)
-    return model
+    def forward(self, x):
+        x = self.encoder(x)
+        x = self.decoder(x)
+        return x
 
 
 if __name__ == '__main__':
@@ -304,11 +285,10 @@ if __name__ == '__main__':
     # down = UperDecoder()
     # result = down(out)
     # print(result)
-    model = ConvNeXtForSeg_base(3, 3, pretrained=True)
+    model = ConvNeXt_Seg(3, 3, model_type="base")
     with torch.no_grad():
         out = model(data)
     print(out)
-
 
 #
 # @register_model

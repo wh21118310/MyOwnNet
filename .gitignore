@@ -1,2 +1,3 @@
 dataset/*/*
-pretrained/*
+pretrained
+out

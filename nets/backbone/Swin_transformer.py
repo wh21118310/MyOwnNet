@@ -603,7 +603,7 @@ params = {
     },
     "base": {
         "patch_size": 4, "window_size": 7, "embed_dim": 128, "depths": (2, 2, 18, 2), "num_heads": (4, 8, 16, 32),
-        "dims":1024
+        "dims": 1024
     },
     "large": {
         "patch_size": 4, "window_size": 7, "embed_dim": 192, "depths": (2, 2, 18, 2), "num_heads": (6, 12, 24, 48),
