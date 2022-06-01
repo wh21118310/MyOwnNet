@@ -20,7 +20,7 @@ from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DistributedSampler, DataLoader
 from tqdm import tqdm
 
-from nets.backbone.Swin_transformer import swin_base
+from nets.backbone.Swin_transformer import SwinNet
 from utils.arguments import get_args_parser, get_scaler, get_opt_and_scheduler, get_criterion, check_path, seed_torch
 from utils.callbacks import initial_logger, AverageMeter
 from utils.data_process import weights_init, DataSetWithSupervised
@@ -39,7 +39,7 @@ pretrained = False
 seed_torch(seed=2022)
 # backbone = DeepLab(num_classes=2, backbone="mobilenet", pretrained=pretrained, downsample_factor=32)
 # backbone = ConvNeXtForSeg_base(3, 3)
-model = swin_base(3, 3)
+model = SwinNet(3, 3, "base")
 Cuda, local_rank, distributed, device, GPU_Count = params['cuda'], params['local_rank'], params["distributed"], params[
     "device"], params["GPU_Count"]
 if not pretrained:
@@ -113,7 +113,7 @@ trainLoader_size, valLoader_size, testLoader_size = len(train_loader), len(val_l
 '''Loading Optimizer and Scheduler'''
 optimizer_type = "sgd"
 momentum = 0.9
-lr_decay = 'cos'
+lr_decay = 'cosW'
 optimizer, scheduler = get_opt_and_scheduler(model=model, optimizer_type=optimizer_type, lr_decay_type=lr_decay,
                                              momentum=momentum)
 '''Loading Scaler'''
@@ -143,7 +143,7 @@ Resume = False  # used for discriminate the status from the breakpoint or start
 
 best_iou, best_epoch, best_mpa, epoch_start = 0.5, 0, 0.5, Init_Epoch
 last_index = 0.
-save_inter, min_inter = 100, 10  # 用来存模型
+save_inter, min_inter = 10, 10  # 用来存模型
 
 # support for the restart from breakpoint
 if Resume and exists(best_ckpt):
@@ -155,7 +155,7 @@ if Resume and exists(best_ckpt):
 
 # training loss curve
 plot = True
-clip_grad = True
+clip_grad = False
 logger.info('Total Epoch:{} Training num:{}  Validation num:{}'.format(
     Total_epoch, train_data_size, valid_data_size))
 for epoch in range(epoch_start, Total_epoch):
@@ -186,8 +186,7 @@ for epoch in range(epoch_start, Total_epoch):
             scaler.step(optimizer)
             scaler.update()
         optimizer.zero_grad(set_to_none=True)
-        torch.cuda.empty_cache()
-        scheduler.step(epoch + batch_idx / trainLoader_size)  # called after every batch update
+        scheduler.step(epoch+ batch_idx / trainLoader_size)  # called after every batch update
         # scheduler.step()  # when use stepLR
         train_main_loss.update(loss.cpu().detach().numpy())
         train_bar.set_description(desc='[train] epoch:{} iter:{}/{} lr:{:.4f} loss:{:.4f}'.format(
@@ -195,7 +194,7 @@ for epoch in range(epoch_start, Total_epoch):
         if batch_idx == trainLoader_size:
             logger.info('[train] epoch:{} iter:{}/{} lr:{:.4f} loss:{:.4f}'.format(
                 epoch, batch_idx, trainLoader_size, optimizer.param_groups[-1]['lr'], train_main_loss.average()))
-
+    torch.cuda.empty_cache()
     model.eval()
     val_bar = tqdm(val_loader)
     val_loss = AverageMeter()
@@ -236,18 +235,21 @@ for epoch in range(epoch_start, Total_epoch):
     if fwIoU_meter.average() > best_iou or (epoch % save_inter == 0 and epoch > min_inter):
         state = {'epoch': epoch, 'backbone': model.state_dict(), 'optimizer': optimizer.state_dict()}
         if last_index == 0.:
-            last_index = fwIoU_meter.average()
-        elif fwIoU_meter.average() - last_index >= 0.3:
             filename = join(save_ckpt_dir, 'ckpt-epoch{}_fwiou{:.2f}.pth'.format(epoch, fwIoU_meter.avg * 100))
             torch.save(state, filename, _use_new_zipfile_serialization=False)
             last_index = fwIoU_meter.average()
+        elif fwIoU_meter.average() - last_index >= 0.001:
+            filename = join(save_ckpt_dir, 'ckpt-epoch{}_fwiou{:.2f}.pth'.format(epoch, fwIoU_meter.avg * 100))
+            torch.save(state, filename, _use_new_zipfile_serialization=False)
+            last_index = fwIoU_meter.average()
+        print(last_index)
         if fwIoU_meter.average() > best_iou:
             best_filename = join(save_ckpt_dir, 'best_model.pth')
             torch.save(state, best_filename, _use_new_zipfile_serialization=False)
             best_iou = fwIoU_meter.average()
             best_mode = copy.deepcopy(model)
             best_epoch = epoch
-            logger.info('[save] Best Model saved at epoch:{}'.format(epoch))
+            logger.info('[save] Best Model saved at epoch:{}, fwIou:{}'.format(epoch, fwIoU_meter.average()))
     if mpa_meter.average() > best_mpa:
         best_mpa = mpa_meter.average()
     # 显示loss

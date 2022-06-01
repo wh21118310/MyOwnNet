@@ -20,7 +20,7 @@ from pytorch_toolbelt.losses import JointLoss
 from segmentation_models_pytorch.losses import *
 from torch import optim
 from torch.nn import BCELoss, MSELoss, BCEWithLogitsLoss
-from torch.optim.lr_scheduler import StepLR
+from torch.optim.lr_scheduler import StepLR, CosineAnnealingWarmRestarts
 from timm.scheduler import CosineLRScheduler
 
 
@@ -137,8 +137,8 @@ Freeze_batch_size = 8  # 模型冻结训练的batch_size (当Freeze_Train=False�
 #   解冻阶段训练参数
 #   此时模型的主干不被冻结了，特征提取网络会发生改变。占用的显存较大，网络所有的参数都会发生改变
 # ------------------------------------------------------------------#
-Total_Epoch = 1  # 模型总共的训练epoch
-Unfreeze_batch_size = 20  # 模型解冻后的batch_size
+Total_Epoch = 100  # 模型总共的训练epoch
+Unfreeze_batch_size = 10  # 模型解冻后的batch_size
 # -------------------------------------------------------------------#
 #   如果不冻结训练的话，直接设置batch_size为Unfreeze_batch_size
 # -------------------------------------------------------------------#
@@ -158,7 +158,7 @@ def get_opt_and_scheduler(model, optimizer_type: str, lr_decay_type: str, moment
     #                       SGD:   Init_lr=7e-3
     #   Min_lr          模型的最小学习率，默认为最大学习率的0.01
     # ------------------------------------------------------------------#
-    Init_lr = {"sgd": 7e-2, "adam": 5e-3}[optimizer_type]
+    Init_lr = {"sgd": 7e-3, "adam": 5e-4}[optimizer_type]
     Min_lr = Init_lr * 0.01
     optimizer = {
         'adam': optim.Adam(chain(model.parameters()), Init_lr, betas=(momentum, 0.999),
@@ -170,8 +170,9 @@ def get_opt_and_scheduler(model, optimizer_type: str, lr_decay_type: str, moment
     #   lr_decay_type   使用到的学习率下降方式，可选的有'step'、'cos'
     # ------------------------------------------------------------------#
     scheduler = {
-        'cos': CosineLRScheduler(optimizer, t_initial=10, t_mul=1.0, lr_min=Min_lr,
-                                 decay_rate=1, warmup_t=0, warmup_lr_init=Init_lr, cycle_limit=10),
+        'cos': CosineLRScheduler(optimizer, t_initial=int(Total_epoch / 3), t_mul=1.0, lr_min=Min_lr,
+                                 decay_rate=0.9, warmup_t=0, warmup_lr_init=Init_lr*0.1, cycle_limit=10),
+        "cosW": CosineAnnealingWarmRestarts(optimizer, T_0=int(Total_epoch/3), T_mult=1, eta_min=Min_lr, last_epoch=-1),
         # lr = 0.05 if epoch < 30; lr= 0.005 if 30 <= epoch < 60; lr = 0.0005 if 60 <= epoch < 90
         'steplr': StepLR(optimizer, step_size=int(Total_epoch / 3), gamma=0.9)
     }[lr_decay_type]

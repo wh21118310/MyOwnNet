@@ -1,3 +1,2 @@
-./logs/*
-./pretrained/*
-./dataset/*/*
+dataset/*/*
+pretrained/*

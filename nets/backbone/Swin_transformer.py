@@ -592,27 +592,51 @@ class LayerNorm(nn.Module):
             return x
 
 
+params = {
+    "tiny": {
+        "patch_size": 4, "window_size": 7, "embed_dim": 96, "depths": (2, 2, 6, 2), "num_heads": (3, 6, 12, 24),
+        "dims": 768
+    },
+    "small": {
+        "patch_size": 4, "window_size": 7, "embed_dim": 96, "depths": (2, 2, 18, 2), "num_heads": (3, 6, 12, 24),
+        "dims": 768
+    },
+    "base": {
+        "patch_size": 4, "window_size": 7, "embed_dim": 128, "depths": (2, 2, 18, 2), "num_heads": (4, 8, 16, 32),
+        "dims":1024
+    },
+    "large": {
+        "patch_size": 4, "window_size": 7, "embed_dim": 192, "depths": (2, 2, 18, 2), "num_heads": (6, 12, 24, 48),
+        "dims": 1536
+    },
+    "xlarge": {
+        "patch_size": 4, "window_size": 12, "embed_dim": 192, "depths": (2, 2, 18, 2), "num_heads": (6, 12, 24, 48),
+        "dims": 2048
+    }
+}
+
+
 # a Simple Decoder
 class UperDecoder(nn.Module):
-    def __init__(self, out_chans=3, dims=[96, 192, 384, 768]):
+    def __init__(self, out_chans=3, dims=None):
         super(UperDecoder, self).__init__()
         self.C4 = nn.Sequential(
-            nn.ConvTranspose2d(dims[3], dims[2], 4, 2, 1),
-            LayerNorm(dims[2], eps=1e-6),
+            nn.ConvTranspose2d(dims, int(dims / 2), 4, 2, 1),
+            LayerNorm(int(dims / 2), eps=1e-6),
             nn.GELU()
         )
         self.C3 = nn.Sequential(
-            nn.ConvTranspose2d(dims[2], dims[1], 4, 2, 1),
-            LayerNorm(dims[1], eps=1e-6),
+            nn.ConvTranspose2d(int(dims/2), int(dims / 4), 4, 2, 1),
+            LayerNorm(int(dims / 4), eps=1e-6),
             nn.GELU()
         )
         self.C2 = nn.Sequential(
-            nn.ConvTranspose2d(dims[1], dims[0], 4, 2, 1),
-            LayerNorm(dims[0], eps=1e-6),
+            nn.ConvTranspose2d(int(dims / 4), int(dims / 8), 4, 2, 1),
+            LayerNorm(int(dims / 8), eps=1e-6),
             nn.GELU()
         )
         self.out = nn.Sequential(
-            nn.ConvTranspose2d(dims[0], out_channels=out_chans, kernel_size=8, stride=4, padding=2, bias=False),
+            nn.ConvTranspose2d(int(dims / 8), out_channels=out_chans, kernel_size=8, stride=4, padding=2, bias=False),
             LayerNorm(out_chans, eps=1e-6),
             nn.GELU()
         )
@@ -625,80 +649,30 @@ class UperDecoder(nn.Module):
         return result
 
 
-class STForSeg(nn.Module):
-    def __init__(self, in_chans=3, patch_size=4, window_size=7, embed_dim=96,
-                 depths=(2, 2, 6, 2), num_heads=(3, 6, 12, 24),
-                 num_classes=2, out_channels=3, dims=[96, 192, 384, 768], **kwargs):
-        super(STForSeg, self).__init__()
-        self.encoder = SwinTransformer(patch_size=patch_size, in_chans=in_chans, num_classes=num_classes,
-                                       embed_dim=embed_dim, depths=depths, num_heads=num_heads,
-                                       window_size=window_size, **kwargs)
-        self.decoder = UperDecoder(out_chans=out_channels, dims=dims)
+class SwinNet(nn.Module):
+    def __init__(self, in_chans, out_chans, Swin_type: str):
+        super(SwinNet, self).__init__()
+        self.params = params[Swin_type]
+        self.encoder = SwinTransformer(in_chans=in_chans, num_classes=3,
+                                       patch_size=self.params["patch_size"],
+                                       embed_dim=self.params["embed_dim"],
+                                       depths=self.params["depths"],
+                                       num_heads=self.params["num_heads"],
+                                       window_size=self.params["window_size"])
+        self.decoder = UperDecoder(out_chans, dims=self.params["dims"])
 
     def forward(self, x):
         x = self.encoder(x)
-        x = self.decoder(x)
-        return x
-
-
-def swin_tiny(in_chans=3, out_chans=3, **kwargs):
-    # trained ImageNet-1K
-    # official pretrain weights:
-    # https://github.com/SwinTransformer/storage/releases/download/v1.0.0/swin_tiny_patch4_window7_224.pth
-    model = STForSeg(in_chans=in_chans, out_chans=out_chans, patch_size=4, window_size=7,
-                     dims=[96, 192, 384, 768], embed_dim=96, depths=(2, 2, 6, 2), num_heads=(3, 6, 12, 24),
-                     num_classes=2, **kwargs)
-    return model
-
-
-def swin_small(in_chans=3, out_chans=3, **kwargs):
-    # trained ImageNet-1K
-    # official pretrain weights:
-    # https://github.com/SwinTransformer/storage/releases/download/v1.0.0/swin_small_patch4_window7_224.pth
-    model = STForSeg(in_chans=in_chans, out_chans=out_chans, patch_size=4, window_size=7,
-                     dims=[96, 192, 384, 768], embed_dim=96, depths=(2, 2, 18, 2), num_heads=(3, 6, 12, 24),
-                     num_classes=2, **kwargs)
-    return model
-
-
-def swin_base(in_chans=3, out_chans=3, **kwargs):
-    # trained ImageNet-1K
-    # official pretrain weights:
-    # https://github.com/SwinTransformer/storage/releases/download/v1.0.0/swin_base_patch4_window7_224.pth
-    model = STForSeg(in_chans=in_chans, out_chans=out_chans, patch_size=4, window_size=7, embed_dim=128,
-                            depths=(2, 2, 18, 2), num_heads=(4, 8, 16, 32), num_classes=3, dims=[128, 256, 512, 1024],
-                            **kwargs)
-    return model
-
-
-def swin_large(in_chans=3, out_chans=3, **kwargs):
-    # trained ImageNet-22K
-    # official pretrain weights:
-    # https://github.com/SwinTransformer/storage/releases/download/v1.0.0/swin_large_patch4_window7_224_22k.pth
-    model = STForSeg(in_chans=in_chans, out_chans=out_chans, patch_size=4, window_size=7, embed_dim=192,
-                     depths=(2, 2, 18, 2), num_heads=(6, 12, 24, 48), num_classes=3, dims=[192, 384, 768, 1536],
-                     **kwargs)
-    return model
-
-
-def swin_xlarge(in_chans=3, out_chans=3, **kwargs):
-    # trained ImageNet-22K
-    # official pretrain weights:
-    # https://github.com/SwinTransformer/storage/releases/download/v1.0.0/swin_large_patch4_window12_384_22k.pth
-    model = STForSeg(in_chans=in_chans, patch_size=4, window_size=12, embed_dim=192, num_classes=3,
-                     depths=(2, 2, 18, 2), num_heads=(6, 12, 24, 48), out_chans=out_chans, dims=[256, 512, 1024, 2048],
-                     **kwargs)
-    return model
+        return self.decoder(x)
 
 
 if __name__ == '__main__':
     data = torch.ones((4, 3, 512, 512))
     # backbone = swin_tiny_patch4_window7_224(num_classes=2)
-    model = swin_base(3, 3)
+    model = SwinNet(3, 3, "base")
     with torch.no_grad():
         out = model(data)
     print(out.size())
-
 
 # def swin_tiny_patch4_window7_224(num_classes: int = 1000, **kwargs):
 #     # trained ImageNet-1K
