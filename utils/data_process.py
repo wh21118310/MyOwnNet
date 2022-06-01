@@ -119,7 +119,7 @@ class DataSetWithNosupervised(Dataset):
 
 
 # 权重初始化
-def weights_init(net, init_type='normal', init_gain=0.02):
+def weights_init(net, init_type='kaiming', init_gain=0.02):
     def init_func(m):
         classname = m.__class__.__name__
         if hasattr(m, 'weight') and classname.find('Conv') != -1:

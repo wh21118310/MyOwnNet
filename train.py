@@ -4,29 +4,24 @@
 @Time : 2022/5/18
 @Author : FaweksLee
 @File : train
-@Description : 
+@Description :
 """
 import copy
 import os
-from itertools import chain
 from os.path import join, exists
 
-import cv2
 import numpy as np
 import torch
-from matplotlib import pyplot as plt
-from timm.scheduler import CosineLRScheduler
-from torch import optim
 from torch.backends import cudnn
 from torch.cuda.amp import autocast
 from torch.nn import DataParallel
 from torch.nn.parallel import DistributedDataParallel
 from torch.nn.utils import clip_grad_norm_
-from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DistributedSampler, DataLoader
 from tqdm import tqdm
-from nets.convnext import ConvNeXt_For_Seg
-from utils.arguments import get_args_parser
+
+from nets.backbone.Swin_transformer import swin_base
+from utils.arguments import get_args_parser, get_scaler, get_opt_and_scheduler, get_criterion, check_path, seed_torch
 from utils.callbacks import initial_logger, AverageMeter
 from utils.data_process import weights_init, DataSetWithSupervised
 from utils.get_metric import binary_accuracy, Acc, FWIoU, smooth
@@ -35,38 +30,23 @@ from utils.transform import transforms
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 
-
-def tensor2img(tensor):
-    image = tensor.squeeze(dim=0).cpu().numpy()
-    image = np.transpose(image, (1, 2, 0))
-    image = image[:, :, ::-1]
-    image = np.float32(image) / 255
-    return image
-
-
-def save_hotmpas(img, epoch, idx):
-    save_path = "../epochs/output_img"
-    save_name = str(epoch) + "_" + str(idx) + "_cam.jpg"
-    save_name = os.path.join(save_path, save_name)
-    cv2.imwrite(save_name, img)
-
-
 params = get_args_parser()
-pretrained = False
-model_path = ""
 
 '''Loading Model'''
-model_name = 'ConvNeXt'
-# model = DeepLab(num_classes=2, backbone="mobilenet", pretrained=pretrained, downsample_factor=32)
-model = ConvNeXt_For_Seg(3, 3)
+model_name = 'SwinT'
+model_path = ""
+pretrained = False
+seed_torch(seed=2022)
+# backbone = DeepLab(num_classes=2, backbone="mobilenet", pretrained=pretrained, downsample_factor=32)
+# backbone = ConvNeXtForSeg_base(3, 3)
+model = swin_base(3, 3)
 Cuda, local_rank, distributed, device, GPU_Count = params['cuda'], params['local_rank'], params["distributed"], params[
     "device"], params["GPU_Count"]
-clip_grad = params["clip_grad"]
 if not pretrained:
     weights_init(model)
 if model_path != "":
     if local_rank == 0:
-        print('Load weights {}.'.format(model_path))
+        print('Load weights {}\n'.format(model_path))
     # ------------------------------------------------------#
     #   根据预训练权重的Key和模型的Key进行加载
     # ------------------------------------------------------#
@@ -98,12 +78,12 @@ if Cuda:
         model = model.cuda()
 
 '''Loading Datasets'''
-batch_size, num_workers = params['batch_size'], params['num_workers']
-data_dir = r"dataset"
-train_imgs_dir, val_imgs_dir, test_imgs_dir = join(data_dir, "train/img"), join(data_dir, "valid/img"), join(data_dir,
-                                                                                                             "test/img")
-train_labels_dir, val_labels_dir, test_labels_dir = join(data_dir, "train/gt"), join(data_dir, "valid/gt"), join(
-    data_dir, "test/gt")
+batch_size = params['batch_size']
+data_dir = r"dataset/MarineFarm"
+train_imgs_dir, val_imgs_dir, test_imgs_dir = join(data_dir, "trainval/images"), join(data_dir, "trainval/images"), \
+                                              join(data_dir, "test/images")
+train_labels_dir, val_labels_dir, test_labels_dir = join(data_dir, "trainval/gt"), join(data_dir, "trainval/gt"), \
+                                                    join(data_dir, "test/gt")
 train_data = DataSetWithSupervised(train_imgs_dir, train_labels_dir, transforms)
 val_data = DataSetWithSupervised(val_imgs_dir, val_labels_dir, transforms)
 test_data = DataSetWithSupervised(test_imgs_dir, test_labels_dir, transforms)
@@ -115,11 +95,13 @@ if distributed:
     batch_size = batch_size // GPU_Count
     shuffle = False
 else:
-    # train_sampler = RandomSampler(train_data)
-    # val_sampler = SequentialSampler(val_data)
-    # test_sampler = SequentialSampler(test_data)
     train_sampler, val_sampler, test_sampler = None, None, None
     shuffle = True
+# ------------------------------------------------------------------#
+# num_workers用于设置是否使用多线程读取数据，1代表关闭多线程。开启后会加快数据读取速度，但是会占用更多内存。
+# Windows只可设定为0
+# ------------------------------------------------------------------#
+num_workers = 0
 train_loader = DataLoader(train_data, shuffle=shuffle, batch_size=batch_size,
                           num_workers=num_workers, sampler=train_sampler, pin_memory=True)
 val_loader = DataLoader(val_data, shuffle=shuffle, batch_size=batch_size,
@@ -127,66 +109,53 @@ val_loader = DataLoader(val_data, shuffle=shuffle, batch_size=batch_size,
 test_loader = DataLoader(test_data, shuffle=shuffle, batch_size=batch_size,
                          num_workers=num_workers, sampler=test_sampler, pin_memory=True)
 trainLoader_size, valLoader_size, testLoader_size = len(train_loader), len(val_loader), len(test_loader)
-'''For Epoch'''
-Init_Epoch = params["Init_Epoch"]
-Total_epoch = params["Total_Epoch"]
-save_epoch = 10  # 多少个epoch保存一次权值
-'''Loading Optimizer'''
-Init_lr_fit, momentum, weight_decay, Min_lr = params['Init_lr_fit'], params['momentum'], params['weight_decay'], params[
-    'Min_lr']
-optimizer_type, lr_decay_type = params['Optimizer'], params['lr_decay']
-optimizer = {
-    'adam': optim.Adam(chain(model.parameters()), Init_lr_fit, betas=(momentum, 0.999),
-                       weight_decay=weight_decay),
-    'sgd': optim.SGD(chain(model.parameters()), Init_lr_fit, momentum=momentum, nesterov=True,
-                     weight_decay=weight_decay),
-}[optimizer_type]
-''''Loading Scheduler'''
-scheduler = {
-    'cos': CosineLRScheduler(optimizer, t_initial=50, t_mul=1.0, lr_min=Min_lr,
-                             decay_rate=weight_decay, warmup_t=0, warmup_lr_init=Init_lr_fit),
-    # lr = 0.05 if epoch < 30; lr= 0.005 if 30 <= epoch < 60; lr = 0.0005 if 60 <= epoch < 90
-    'steplr': StepLR(optimizer, step_size=int(Total_epoch / 3), gamma=0.1)
-}[lr_decay_type]
 
+'''Loading Optimizer and Scheduler'''
+optimizer_type = "sgd"
+momentum = 0.9
+lr_decay = 'cos'
+optimizer, scheduler = get_opt_and_scheduler(model=model, optimizer_type=optimizer_type, lr_decay_type=lr_decay,
+                                             momentum=momentum)
 '''Loading Scaler'''
-scaler = params["scaler"]
+fp16 = True
+scaler = get_scaler(fp16)
 
 '''Loading criterion'''
-criterion = params["criterion"]
+criterion_name = "bcew"
+criterion = get_criterion(loss_name=criterion_name, is_gpu=Cuda)
 
 '''Save Path'''
-save_dir = './outputs'  # 权值与日志文件保存的文件夹
+nowPath = os.getcwd()
+save_dir = join(nowPath, 'out', model_name)  # 权值与日志文件保存的文件夹
+check_path(save_dir)
 save_ckpt_dir, save_log_dir = join(save_dir, 'ckpt'), join(save_dir, 'log')
 best_ckpt = join(save_ckpt_dir, 'best_model.pth')
-if not exists(save_ckpt_dir):
-    os.makedirs(save_ckpt_dir)
-if not exists(save_log_dir):
-    os.makedirs(save_log_dir)
-
+check_path(save_ckpt_dir)
+check_path(save_log_dir)
+'''For Epoch'''
+Init_Epoch, Total_epoch = params["Init_Epoch"], params["Total_Epoch"]
 '''Logger'''
 logger = initial_logger(join(save_log_dir, model_name + '.log'))
-
 '''Main Iteration'''
 train_loss_total_epochs, valid_loss_total_epochs, epoch_lr = list(), list(), list()
 
 Resume = False  # used for discriminate the status from the breakpoint or start
 
-best_iou, best_epoch, best_mpa, epoch_start, best_mode = 0, 0, 0, Init_Epoch, copy.deepcopy(model)
-
-save_inter, min_inter = 100, 0  # 用来存模型
+best_iou, best_epoch, best_mpa, epoch_start = 0.5, 0, 0.5, Init_Epoch
+last_index = 0.
+save_inter, min_inter = 100, 10  # 用来存模型
 
 # support for the restart from breakpoint
 if Resume and exists(best_ckpt):
     checkpoint = torch.load(best_ckpt)
-    model.load_state_dict(checkpoint['model'])
+    model.load_state_dict(checkpoint['backbone'])
     optimizer.load_state_dict(checkpoint['optimizer'])
     epoch_start = checkpoint['epoch']
     scheduler.load_state_dict(checkpoint['scheduler'])
 
 # training loss curve
 plot = True
-
+clip_grad = True
 logger.info('Total Epoch:{} Training num:{}  Validation num:{}'.format(
     Total_epoch, train_data_size, valid_data_size))
 for epoch in range(epoch_start, Total_epoch):
@@ -219,6 +188,7 @@ for epoch in range(epoch_start, Total_epoch):
         optimizer.zero_grad(set_to_none=True)
         torch.cuda.empty_cache()
         scheduler.step(epoch + batch_idx / trainLoader_size)  # called after every batch update
+        # scheduler.step()  # when use stepLR
         train_main_loss.update(loss.cpu().detach().numpy())
         train_bar.set_description(desc='[train] epoch:{} iter:{}/{} lr:{:.4f} loss:{:.4f}'.format(
             epoch, batch_idx, trainLoader_size, optimizer.param_groups[-1]['lr'], train_main_loss.average()))
@@ -246,7 +216,7 @@ for epoch in range(epoch_start, Total_epoch):
                 epoch, batch_idx, valLoader_size, val_loss.average()))
             if batch_idx == valLoader_size:
                 logger.info('[val] epoch:{} iter:{}/{} loss:{:.4f}'.format(
-                    epoch, batch_idx+1, valLoader_size, val_loss.average()))
+                    epoch, batch_idx, valLoader_size, val_loss.average()))
             '''以下部分由于数据集的图片是二分类图像，故采用以下方式处理'''
             # outputs = torch.sigmoid(outputs)
             outputs = torch.where(outputs > 0.5, torch.ones_like(outputs), torch.zeros_like(outputs))
@@ -263,10 +233,14 @@ for epoch in range(epoch_start, Total_epoch):
     valid_loss_total_epochs.append(val_loss.average())
     epoch_lr.append(optimizer.param_groups[-1]['lr'])
     # save Model
-    if fwIoU_meter.average() > best_iou or epoch == 0 or (epoch % save_inter == 0 and epoch > min_inter):
-        state = {'epoch': epoch, 'model': model.state_dict(), 'optimizer': optimizer.state_dict()}
-        filename = join(save_ckpt_dir, 'ckpt-epoch{}_fwiou{:.2f}.pth'.format(epoch, fwIoU_meter.avg * 100))
-        torch.save(state, filename, _use_new_zipfile_serialization=False)
+    if fwIoU_meter.average() > best_iou or (epoch % save_inter == 0 and epoch > min_inter):
+        state = {'epoch': epoch, 'backbone': model.state_dict(), 'optimizer': optimizer.state_dict()}
+        if last_index == 0.:
+            last_index = fwIoU_meter.average()
+        elif fwIoU_meter.average() - last_index >= 0.3:
+            filename = join(save_ckpt_dir, 'ckpt-epoch{}_fwiou{:.2f}.pth'.format(epoch, fwIoU_meter.avg * 100))
+            torch.save(state, filename, _use_new_zipfile_serialization=False)
+            last_index = fwIoU_meter.average()
         if fwIoU_meter.average() > best_iou:
             best_filename = join(save_ckpt_dir, 'best_model.pth')
             torch.save(state, best_filename, _use_new_zipfile_serialization=False)
@@ -277,8 +251,14 @@ for epoch in range(epoch_start, Total_epoch):
     if mpa_meter.average() > best_mpa:
         best_mpa = mpa_meter.average()
     # 显示loss
-    print("best_epoch:{}, nowIoU: {:.4f}, bestIoU:{:.4f}, now_mPA:{:.4f}, best_mPA:{:.4f}"
+    print("best_epoch:{}, nowIoU: {:.4f}, bestIoU:{:.4f}, now_mPA:{:.4f}, best_mPA:{:.4f}\n"
           .format(best_epoch, fwIoU_meter.average() * 100, best_iou * 100, mpa_meter.average() * 100, best_mpa * 100))
+
+import matplotlib
+
+matplotlib.use("TkAgg")
+from matplotlib import pyplot as plt
+
 if plot:
     x = [i for i in range(Total_epoch)]
     fig = plt.figure(figsize=(12, 4))
@@ -286,7 +266,7 @@ if plot:
     ax.plot(x, smooth(train_loss_total_epochs, 0.6), label='train loss')
     ax.plot(x, smooth(valid_loss_total_epochs, 0.6), label='val loss')
     ax.set_xlabel('Epoch', fontsize=15)
-    ax.set_ylabel('CrossEntropy', fontsize=15)
+    ax.set_ylabel('Loss', fontsize=15)
     ax.set_title('train curve', fontsize=15)
     ax.grid(True)
     plt.legend(loc='upper right', fontsize=15)
@@ -297,4 +277,5 @@ if plot:
     ax.set_title('lr curve', fontsize=15)
     ax.grid(True)
     plt.legend(loc='upper right', fontsize=15)
-    plt.show()
+    plt.tight_layout()
+    plt.savefig(save_log_dir+"./train_val.png")
