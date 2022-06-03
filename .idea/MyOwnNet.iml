@@ -6,6 +6,7 @@
     <orderEntry type="sourceFolder" forTests="false" />
     <orderEntry type="module" module-name="project_airport" />
     <orderEntry type="module" module-name="network" />
+    <orderEntry type="module" module-name="CVPR2021_PFNet-main" />
   </component>
   <component name="PyDocumentationSettings">
     <option name="format" value="PLAIN" />
