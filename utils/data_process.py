@@ -52,7 +52,7 @@ from torch.utils import model_zoo
 from torchvision.transforms import transforms
 
 
-class DataSetWithSupervised(Dataset):
+class MarineFarmData(Dataset):
     def __init__(self, imgs_dir, labels_dir, transform=None):
         self.imgs_dir = imgs_dir
         self.labels_dir = labels_dir

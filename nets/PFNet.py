@@ -11,7 +11,32 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .backbone import resnet
+from torchsummary import summary
+
+from backbone import resnet
+
+
+###################################################################
+# ################## Backbone ######################
+###################################################################
+class Backbone(nn.Module):
+    def __init__(self, backbone="resnet50", pretrain=False):
+        super(Backbone, self).__init__()
+        if backbone == 'resnet50':
+            self.backbone = resnet.resnet50(pretrain)
+            self.layer0 = nn.Sequential(self.backbone.conv1, self.backbone.bn1, self.backbone.relu)
+            self.layer1 = nn.Sequential(self.backbone.maxpool, self.backbone.layer1)
+            self.layer2 = self.backbone.layer2
+            self.layer3 = self.backbone.layer3
+            self.layer4 = self.backbone.layer4
+
+    def forward(self, x):
+        layer0 = self.layer0(x)  # [-1, 64, h/2, w/2]
+        layer1 = self.layer1(layer0)  # [-1, 256, h/4, w/4]
+        layer2 = self.layer2(layer1)  # [-1, 512, h/8, w/8]
+        layer3 = self.layer3(layer2)  # [-1, 1024, h/16, w/16]
+        layer4 = self.layer4(layer3)  # [-1, 2048, h/32, w/32]
+        return layer0, layer1, layer2, layer3, layer4
 
 
 ###################################################################
@@ -228,17 +253,12 @@ class Focus(nn.Module):
 # ########################## NETWORK ##############################
 ###################################################################
 class PFNet(nn.Module):
-    def __init__(self, pretrain=False):
+    def __init__(self, pretrain=False, backbone='resnet50'):
         super(PFNet, self).__init__()
         # params
 
         # backbone
-        resnet50 = resnet.resnet50(pretrain)
-        self.layer0 = nn.Sequential(resnet50.conv1, resnet50.bn1, resnet50.relu)
-        self.layer1 = nn.Sequential(resnet50.maxpool, resnet50.layer1)
-        self.layer2 = resnet50.layer2
-        self.layer3 = resnet50.layer3
-        self.layer4 = resnet50.layer4
+        self.backbone = Backbone(backbone=backbone, pretrain=pretrain)
 
         # channel reduction
         self.cr4 = nn.Sequential(nn.Conv2d(2048, 512, 3, 1, 1), nn.BatchNorm2d(512), nn.ReLU())
@@ -260,11 +280,7 @@ class PFNet(nn.Module):
 
     def forward(self, x):
         # x: [batch_size, channel=3, h, w]
-        layer0 = self.layer0(x)  # [-1, 64, h/2, w/2]
-        layer1 = self.layer1(layer0)  # [-1, 256, h/4, w/4]
-        layer2 = self.layer2(layer1)  # [-1, 512, h/8, w/8]
-        layer3 = self.layer3(layer2)  # [-1, 1024, h/16, w/16]
-        layer4 = self.layer4(layer3)  # [-1, 2048, h/32, w/32]
+        layer0, layer1, layer2, layer3, layer4 = self.backbone(x)
 
         # channel reduction
         cr4 = self.cr4(layer4)
@@ -291,3 +307,10 @@ class PFNet(nn.Module):
 
         return torch.sigmoid(predict4), torch.sigmoid(predict3), torch.sigmoid(predict2), torch.sigmoid(
             predict1)
+
+
+if __name__ == '__main__':
+    data = torch.rand((4, 3, 512, 512))
+    net = PFNet()
+    result = net(data)
+    print(result)

@@ -24,7 +24,7 @@ from nets.backbone.Swin_transformer import SwinNet
 from nets.backbone.convnext import ConvNeXt_Seg
 from utils.arguments import get_args_parser, get_scaler, get_opt_and_scheduler, get_criterion, check_path, seed_torch
 from utils.callbacks import initial_logger, AverageMeter
-from utils.data_process import weights_init, DataSetWithSupervised
+from utils.data_process import weights_init, MarineFarmData
 from utils.get_metric import binary_accuracy, Acc, FWIoU, smooth
 from utils.transform import transforms
 
@@ -85,9 +85,9 @@ train_imgs_dir, val_imgs_dir, test_imgs_dir = join(data_dir, "trainval/images"),
                                               join(data_dir, "test/images")
 train_labels_dir, val_labels_dir, test_labels_dir = join(data_dir, "trainval/gt"), join(data_dir, "trainval/gt"), \
                                                     join(data_dir, "test/gt")
-train_data = DataSetWithSupervised(train_imgs_dir, train_labels_dir, transforms)
-val_data = DataSetWithSupervised(val_imgs_dir, val_labels_dir, transforms)
-test_data = DataSetWithSupervised(test_imgs_dir, test_labels_dir, transforms)
+train_data = MarineFarmData(train_imgs_dir, train_labels_dir, transforms)
+val_data = MarineFarmData(val_imgs_dir, val_labels_dir, transforms)
+test_data = MarineFarmData(test_imgs_dir, test_labels_dir, transforms)
 train_data_size, valid_data_size, test_data_size = train_data.__len__(), val_data.__len__(), test_data.__len__()
 if distributed:
     train_sampler = DistributedSampler(train_data, shuffle=True)
@@ -134,18 +134,9 @@ best_ckpt = join(save_ckpt_dir, 'best_model.pth')
 check_path(save_ckpt_dir)
 check_path(save_log_dir)
 '''For Epoch'''
-Init_Epoch, Total_epoch = params["Init_Epoch"], params["Total_Epoch"]
-'''Logger'''
-logger = initial_logger(join(save_log_dir, model_name + '.log'))
-'''Main Iteration'''
-train_loss_total_epochs, valid_loss_total_epochs, epoch_lr = list(), list(), list()
-
+epoch_start, Total_epoch = params["Init_Epoch"], params["Total_Epoch"]
+'''For Restart'''
 Resume = False  # used for discriminate the status from the breakpoint or start
-
-best_iou, best_epoch, best_mpa, epoch_start = 0.5, 0, 0.5, Init_Epoch
-last_index, save_iter = 0., 0
-save_inter, min_inter = 10, 10  # 用来存模型
-
 # support for the restart from breakpoint
 if Resume and exists(best_ckpt):
     checkpoint = torch.load(best_ckpt)
@@ -154,9 +145,17 @@ if Resume and exists(best_ckpt):
     epoch_start = checkpoint['epoch']
     scheduler.load_state_dict(checkpoint['scheduler'])
 
-# training loss curve
+'''Logger'''
+logger = initial_logger(join(save_log_dir, model_name + '.log'))
+'''Main Iteration'''
+train_loss_total_epochs, valid_loss_total_epochs, epoch_lr = list(), list(), list()
+
+'''Train & val'''
 plot = True
 clip_grad = False
+best_iou, best_epoch, best_mpa = 0.5, 0, 0.5
+last_index, save_iter = 0., 0
+save_inter, min_inter = 10, 10  # 用来存模型
 logger.info('Total Epoch:{} Training num:{}  Validation num:{}'.format(
     Total_epoch, train_data_size, valid_data_size))
 for epoch in range(epoch_start, Total_epoch):
@@ -187,7 +186,7 @@ for epoch in range(epoch_start, Total_epoch):
             scaler.step(optimizer)
             scaler.update()
         optimizer.zero_grad(set_to_none=True)
-        scheduler.step(epoch+ batch_idx / trainLoader_size)  # called after every batch update
+        scheduler.step(epoch + batch_idx / trainLoader_size)  # called after every batch update
         # scheduler.step()  # when use stepLR
         train_main_loss.update(loss.cpu().detach().numpy())
         train_bar.set_description(desc='[train] epoch:{} iter:{}/{} lr:{:.4f} loss:{:.4f}'.format(
