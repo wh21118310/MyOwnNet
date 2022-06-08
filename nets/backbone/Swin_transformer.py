@@ -281,13 +281,13 @@ class WindowAttention(nn.Module):
             attn = self.softmax(attn)
         else:
             attn = self.softmax(attn)
-
         attn = self.attn_drop(attn)
 
         # @: multiply -> [batch_size*num_windows, num_heads, Mh*Mw, embed_dim_per_head]
         # transpose: -> [batch_size*num_windows, Mh*Mw, num_heads, embed_dim_per_head]
         # reshape: -> [batch_size*num_windows, Mh*Mw, total_embed_dim]
         x = (attn @ v).transpose(1, 2).reshape(B_, N, C)
+        # a*b 逐元素乘积， a@b 等同于 np.matmul 矩阵乘法
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
@@ -534,8 +534,8 @@ class SwinTransformer(nn.Module):
             self.layers.append(layers)
 
         self.norm = norm_layer(self.num_features)
-        self.avgpool = nn.AdaptiveAvgPool1d(1)
-        self.head = nn.Linear(self.num_features, num_classes) if num_classes > 0 else nn.Identity()
+        # self.avgpool = nn.AdaptiveAvgPool1d(1)
+        # self.head = nn.Linear(self.num_features, num_classes) if num_classes > 0 else nn.Identity()
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -549,10 +549,12 @@ class SwinTransformer(nn.Module):
 
     def forward(self, x):
         # x: [B, L, C]
+        num = 0
         x, H, W = self.patch_embed(x)
         x = self.pos_drop(x)
         # stage1, stage2, stage3, stage4
         for layer in self.layers:
+            num+=1
             x, H, W = layer(x, H, W)
         # LayerNorm
         x = self.norm(x)  # [B, L, C], L 可以分解
@@ -565,12 +567,12 @@ class SwinTransformer(nn.Module):
 
 
 class LayerNorm(nn.Module):
-    r""" LayerNorm that supports two data formats: channels_last (default) or channels_first.
+    """
+    LayerNorm that supports two data formats: channels_last (default) or channels_first.
     The ordering of the dimensions in the inputs. channels_last corresponds to inputs with
     shape (batch_size, height, width, channels) while channels_first corresponds to inputs
     with shape (batch_size, channels, height, width).
     """
-
     def __init__(self, normalized_shape, eps=1e-6, data_format="channels_first"):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(normalized_shape))
@@ -626,7 +628,7 @@ class UperDecoder(nn.Module):
             nn.GELU()
         )
         self.C3 = nn.Sequential(
-            nn.ConvTranspose2d(int(dims/2), int(dims / 4), 4, 2, 1),
+            nn.ConvTranspose2d(int(dims / 2), int(dims / 4), 4, 2, 1),
             LayerNorm(int(dims / 4), eps=1e-6),
             nn.GELU()
         )
@@ -649,30 +651,24 @@ class UperDecoder(nn.Module):
         return result
 
 
-class SwinNet(nn.Module):
-    def __init__(self, in_chans, out_chans, Swin_type: str):
-        super(SwinNet, self).__init__()
-        self.params = params[Swin_type]
-        self.encoder = SwinTransformer(in_chans=in_chans, num_classes=3,
-                                       patch_size=self.params["patch_size"],
-                                       embed_dim=self.params["embed_dim"],
-                                       depths=self.params["depths"],
-                                       num_heads=self.params["num_heads"],
-                                       window_size=self.params["window_size"])
-        self.decoder = UperDecoder(out_chans, dims=self.params["dims"])
-
-    def forward(self, x):
-        x = self.encoder(x)
-        return self.decoder(x)
+def SwinNet(in_chans, Swin_type: str):
+    param = params[Swin_type]
+    encoder = SwinTransformer(in_chans=in_chans, num_classes=3,
+                              patch_size=param["patch_size"],
+                              embed_dim=param["embed_dim"],
+                              depths=param["depths"],
+                              num_heads=param["num_heads"],
+                              window_size=param["window_size"])
+    return encoder
 
 
 if __name__ == '__main__':
     data = torch.ones((4, 3, 512, 512))
     # backbone = swin_tiny_patch4_window7_224(num_classes=2)
-    model = SwinNet(3, 3, "base")
+    model = SwinNet(3, "base")
     with torch.no_grad():
         out = model(data)
-    print(out.size())
+    print(out)
 
 # def swin_tiny_patch4_window7_224(num_classes: int = 1000, **kwargs):
 #     # trained ImageNet-1K

@@ -10,9 +10,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
-from timm.models.layers import trunc_normal_, DropPath
-from timm.models.registry import register_model
-from torchsummary import summary
+from timm.models.layers import trunc_normal_
+from torchinfo import summary
+
+from nets.tricks.droppath import DropPath
 
 
 class LayerNorm(nn.Module):
@@ -23,7 +24,7 @@ class LayerNorm(nn.Module):
     """
 
     def __init__(self, normalized_shape, eps=1e-6, data_format="channels_last"):
-        super().__init__()
+        super(LayerNorm, self).__init__()
         self.weight = nn.Parameter(torch.ones(normalized_shape))
         self.bias = nn.Parameter(torch.zeros(normalized_shape))
         self.eps = eps
@@ -55,8 +56,8 @@ class Block(nn.Module):
         layer_scale_init_value (float): Init value for Layer Scale. Default: 1e-6.
     """
 
-    def __init__(self, dim, drop_path=0., layer_scale_init_value=1e-6):
-        super().__init__()
+    def __init__(self, dim, drop_prob=0., layer_scale_init_value=1e-6):
+        super(Block, self).__init__()
         self.dwconv = nn.Conv2d(dim, dim, kernel_size=7, padding=3, groups=dim)  # depthwise conv
         self.norm = LayerNorm(dim, eps=1e-6)
         self.pwconv1 = nn.Linear(dim, 4 * dim)  # pointwise/1x1 convs, implemented with linear layers
@@ -65,7 +66,8 @@ class Block(nn.Module):
         self.gamma = nn.Parameter(layer_scale_init_value * torch.ones(dim),
                                   requires_grad=True) if layer_scale_init_value > 0 else None
         # Regularization
-        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.drop_path = DropPath(drop_prob)
+        # if drop_prob > 0. else nn.Identity()
 
     def forward(self, x):
         input = x
@@ -99,13 +101,14 @@ class ConvNeXt(nn.Module):
         head_init_scale (float): Init scaling value for classifier weights and biases. Default: 1.
     """
 
-    def __init__(self, in_chans=3, depths=[3, 3, 9, 3], dims=[96, 192, 384, 768],
-                 drop_path_rate=0., layer_scale_init_value=1e-6, out_indices=[0, 1, 2, 3]):
-        super().__init__()
+    def __init__(self, in_chans=3, depths=[3, 3, 9, 3], dims=[96, 192, 384, 768], drop_path_rate=0.,
+                 layer_scale_init_value=1e-6, out_indices=[0, 1, 2, 3]):
+        super(ConvNeXt, self).__init__()
         self.downsample_layers = nn.ModuleList()  # stem and 3 intermediate downsampling conv layers
         # stem layers are the 4x4 Conv with stride=4 in transformer, replacing the Pooling in ResNet
         stem = nn.Sequential(
-            nn.Conv2d(in_chans, dims[0], kernel_size=4, stride=4),
+            # nn.Conv2d(in_chans, dims[0], kernel_size=4, stride=4),
+            nn.Conv2d(in_chans, dims[0], kernel_size=2, stride=2),
             LayerNorm(dims[0], eps=1e-6, data_format="channels_first")
         )
         # 3 downsample in stage2-stage4
@@ -122,7 +125,7 @@ class ConvNeXt(nn.Module):
         cur = 0
         for i in range(4):
             stage = nn.Sequential(
-                *[Block(dim=dims[i], drop_path=dp_rates[cur + j],
+                *[Block(dim=dims[i], drop_prob=dp_rates[cur + j],
                         layer_scale_init_value=layer_scale_init_value) for j in range(depths[i])]
             )
             self.stages.append(stage)
@@ -133,7 +136,7 @@ class ConvNeXt(nn.Module):
         norm_layer = partial(LayerNorm, eps=1e-6, data_format="channels_first")
         for i_layer in range(4):
             layer = norm_layer(dims[i_layer])
-            layer_name = f'norm{i_layer}'
+            layer_name = 'norm{}'.format(i_layer)
             self.add_module(layer_name, layer)
         self.apply(self._init_weights)
 
@@ -166,10 +169,12 @@ class ConvNeXt(nn.Module):
     def forward(self, x):
         outs = []
         for i in range(4):
-            x = self.downsample_layers[i](x)  # (b, 96, 128, 128)->(b, 192, 64, 64)->(b, 384, 32, 32)->(4, 768, 16, 16)
+            # (b, 96, 128, 128)->(b, 192, 64, 64)->(b, 384, 32, 32)->(4, 768, 16, 16)
+            # (b, 128, 128, 128)->(b, 256, 64, 64)->(b, 512, 32, 32)->(4, 1024, 16, 16)
+            x = self.downsample_layers[i](x)
             x = self.stages[i](x)
             if i in self.out_indices:
-                norm_layer = getattr(self, f'norm{i}')
+                norm_layer = getattr(self, 'norm{}'.format(i))
                 x_out = norm_layer(x)
                 outs.append(x_out)
         x = tuple(outs)
@@ -177,54 +182,41 @@ class ConvNeXt(nn.Module):
 
 
 # a Simple Decoder
-class UperDecoder(nn.Module):
-    def __init__(self, out_chans=3, dims=[96, 192, 384, 768]):
-        super(UperDecoder, self).__init__()
-        self.C4 = nn.Sequential(
-            nn.ConvTranspose2d(dims[3], dims[2], 4, 2, 1),
-            LayerNorm(dims[2], eps=1e-6, data_format='channels_first'),
-            nn.GELU()
-        )
-        self.C3 = nn.Sequential(
-            nn.ConvTranspose2d(dims[2], dims[1], 4, 2, 1),
-            LayerNorm(dims[1], eps=1e-6, data_format='channels_first'),
-            nn.GELU()
-        )
-        self.C2 = nn.Sequential(
-            nn.ConvTranspose2d(dims[1], dims[0], 4, 2, 1),
-            LayerNorm(dims[0], eps=1e-6, data_format='channels_first'),
-            nn.GELU()
-        )
-        self.out = nn.Sequential(
-            nn.ConvTranspose2d(dims[0], out_channels=out_chans, kernel_size=8, stride=4, padding=2, bias=False),
-            LayerNorm(out_chans, eps=1e-6, data_format='channels_first'),
-            # nn.Softmax(dim=1)
-        )
-
-    def forward(self, x):
-        assert isinstance(x, tuple) is True, "input is None"
-        x1, x2, x3, x4 = x[:]  # x1: (4，96，128，128);x2:(4,192,64,64);x3:(4,384,32,32);x4:(4,768,16,16)
-        x4_d = self.C4(x4)
-        x3 += x4_d
-        x3_d = self.C3(x3)
-        x2 += x3_d
-        x2_d = self.C2(x2)
-        x1 += x2_d
-        result = self.out(x1)
-        return result
-
-
-class ConvNeXt_For_Seg(nn.Module):
-    def __init__(self, in_channels=3, out_channels=3, depths=[3, 3, 9, 3], dims=[96, 192, 384, 768], **kwargs):
-        super(ConvNeXt_For_Seg, self).__init__()
-        self.encoder = ConvNeXt(in_chans=in_channels, depths=depths, dims=dims, **kwargs)
-        self.decoder = UperDecoder(out_chans=out_channels, dims=dims)
-
-    def forward(self, x):
-        x = self.encoder(x)
-        x = self.decoder(x)
-        return x
-
+# class UperDecoder(nn.Module):
+#     def __init__(self, out_chans=3, dims=[96, 192, 384, 768]):
+#         super(UperDecoder, self).__init__()
+#         self.C4 = nn.Sequential(
+#             nn.ConvTranspose2d(dims[3], dims[2], 4, 2, 1),
+#             LayerNorm(dims[2], eps=1e-6, data_format='channels_first'),
+#             nn.GELU()
+#         )
+#         self.C3 = nn.Sequential(
+#             nn.ConvTranspose2d(dims[2], dims[1], 4, 2, 1),
+#             LayerNorm(dims[1], eps=1e-6, data_format='channels_first'),
+#             nn.GELU()
+#         )
+#         self.C2 = nn.Sequential(
+#             nn.ConvTranspose2d(dims[1], dims[0], 4, 2, 1),
+#             LayerNorm(dims[0], eps=1e-6, data_format='channels_first'),
+#             nn.GELU()
+#         )
+#         self.out = nn.Sequential(
+#             nn.ConvTranspose2d(dims[0], out_channels=out_chans, kernel_size=8, stride=4, padding=2, bias=False),
+#             LayerNorm(out_chans, eps=1e-6, data_format='channels_first'),
+#             # nn.Softmax(dim=1)
+#         )
+#
+#     def forward(self, x):
+#         assert isinstance(x, tuple) is True, "input is None"
+#         x1, x2, x3, x4 = x[:]  # x1: (4，96，128，128);x2:(4,192,64,64);x3:(4,384,32,32);x4:(4,768,16,16)
+#         x4_d = self.C4(x4)
+#         x3 += x4_d
+#         x3_d = self.C3(x3)
+#         x2 += x3_d
+#         x2_d = self.C2(x2)
+#         x1 += x2_d
+#         result = self.out(x1)
+#         return result
 
 params = {
     "tiny": {
@@ -254,25 +246,19 @@ params = {
 
 }
 
-class ConvNeXt_Seg(nn.Module):
-    def __init__(self, inChannels=3, outChannels=3, pretrained=False, in_22k=False, model_type="base", **kwargs):
-        super(ConvNeXt_Seg, self).__init__()
-        self.params = params[model_type]
-        self.encoder = ConvNeXt(in_chans=inChannels, depths=self.params["depths"], dims=self.params["dims"], **kwargs)
-        self.decoder = UperDecoder(out_chans=outChannels, dims=self.params["dims"])
-        if pretrained:
-            if model_type != "xlarge":
-                url = self.params["convnext_22k"] if in_22k else self.params["convnext_1k"]
-            else:
-                assert in_22k, "only ImageNet-22K pre-trained ConvNeXt-XL is available; please set in_22k=True"
-                url = self.params["convnext_22k"]
-            checkpoint = torch.hub.load_state_dict_from_url(url=url, map_location="cpu", check_hash=True)
-            model.load_state_dict(checkpoint["backbone"], strict=False)
 
-    def forward(self, x):
-        x = self.encoder(x)
-        x = self.decoder(x)
-        return x
+def ConvNeXt_Seg(inChannels=3, pretrained=False, in_22k=False, model_type="base", **kwargs):
+    Params = params[model_type]
+    encoder = ConvNeXt(in_chans=inChannels, depths=Params["depths"], dims=Params["dims"], **kwargs)
+    if pretrained:
+        if model_type != "xlarge":
+            url = Params["convnext_22k"] if in_22k else Params["convnext_1k"]
+        else:
+            assert in_22k, "only ImageNet-22K pre-trained ConvNeXt-XL is available; please set in_22k=True"
+            url = Params["convnext_22k"]
+        checkpoint = torch.hub.load_state_dict_from_url(url=url, map_location="cpu", check_hash=True)
+        encoder.load_state_dict(checkpoint["backbone"], strict=False)
+    return encoder
 
 
 if __name__ == '__main__':
@@ -285,58 +271,7 @@ if __name__ == '__main__':
     # down = UperDecoder()
     # result = down(out)
     # print(result)
-    model = ConvNeXt_Seg(3, 3, model_type="base")
+    model = ConvNeXt_Seg(3, model_type="base")
     with torch.no_grad():
         out = model(data)
     print(out)
-
-#
-# @register_model
-# def convnext_tiny(pretrained=False, in_22k=False, **kwargs):
-#     backbone = ConvNeXt(depths=[3, 3, 9, 3], dims=[96, 192, 384, 768], **kwargs)
-#     if pretrained:
-#         url = model_urls['convnext_tiny_22k'] if in_22k else model_urls['convnext_tiny_1k']
-#         checkpoint = torch.hub.load_state_dict_from_url(url=url, map_location="cpu", check_hash=True)
-#         backbone.load_state_dict(checkpoint["backbone"])
-#     return backbone
-#
-#
-# @register_model
-# def convnext_small(pretrained=False, in_22k=False, **kwargs):
-#     backbone = ConvNeXt(depths=[3, 3, 27, 3], dims=[96, 192, 384, 768], **kwargs)
-#     if pretrained:
-#         url = model_urls['convnext_small_22k'] if in_22k else model_urls['convnext_small_1k']
-#         checkpoint = torch.hub.load_state_dict_from_url(url=url, map_location="cpu")
-#         backbone.load_state_dict(checkpoint["backbone"])
-#     return backbone
-#
-#
-# @register_model
-# def convnext_base(pretrained=False, in_22k=False, **kwargs):
-#     backbone = ConvNeXt(depths=[3, 3, 27, 3], dims=[128, 256, 512, 1024], **kwargs)
-#     if pretrained:
-#         url = model_urls['convnext_base_22k'] if in_22k else model_urls['convnext_base_1k']
-#         checkpoint = torch.hub.load_state_dict_from_url(url=url, map_location="cpu")
-#         backbone.load_state_dict(checkpoint["backbone"])
-#     return backbone
-#
-#
-# @register_model
-# def convnext_large(pretrained=False, in_22k=False, **kwargs):
-#     backbone = ConvNeXt(depths=[3, 3, 27, 3], dims=[192, 384, 768, 1536], **kwargs)
-#     if pretrained:
-#         url = model_urls['convnext_large_22k'] if in_22k else model_urls['convnext_large_1k']
-#         checkpoint = torch.hub.load_state_dict_from_url(url=url, map_location="cpu")
-#         backbone.load_state_dict(checkpoint["backbone"])
-#     return backbone
-#
-#
-# @register_model
-# def convnext_xlarge(pretrained=False, in_22k=False, **kwargs):
-#     backbone = ConvNeXt(depths=[3, 3, 27, 3], dims=[256, 512, 1024, 2048], **kwargs)
-#     if pretrained:
-#         assert in_22k, "only ImageNet-22K pre-trained ConvNeXt-XL is available; please set in_22k=True"
-#         url = model_urls['convnext_xlarge_22k']
-#         checkpoint = torch.hub.load_state_dict_from_url(url=url, map_location="cpu")
-#         backbone.load_state_dict(checkpoint["backbone"])
-#     return backbone

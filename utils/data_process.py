@@ -63,7 +63,7 @@ class MarineFarmData(Dataset):
         assert len(self.labels_path) == len(self.imgs_path), "The numbers of labels is not compared to images"
         self.ids = [os.path.splitext(file)[0] for file in self.imgs_path
                     if not file.startswith('.')]
-        logging.info(f'Creating dataset with {len(self.ids)} examples')
+        logging.info(r'Creating dataset with {len(self.ids)} examples')
 
     def __len__(self):
         return len(self.ids)
@@ -79,7 +79,7 @@ class MarineFarmData(Dataset):
         label = cv2.imread(label_path, cv2.IMREAD_UNCHANGED)
         label = cv2.cvtColor(label, cv2.COLOR_BGR2RGB)
         # if want the result to get the 1d image
-        # mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+        label = cv2.cvtColor(label, cv2.COLOR_RGB2GRAY)
         if self.transform:
             transformed = self.transform(image=img, mask=label)
             transformed_image = transformed['image']
@@ -136,9 +136,8 @@ def weights_init(net, init_type='kaiming', init_gain=0.02):
         elif classname.find('BatchNorm2d') != -1:
             torch.nn.init.normal_(m.weight.data, 1.0, 0.02)
             torch.nn.init.constant_(m.bias.data, 0.0)
-
-    print('initialize network with %s type' % init_type)
-    net.apply(init_func)
+        print('initialize network with %s type' % init_type)
+        net.apply(init_func)
 
 
 def load_url(url, model_dir='../logs', map_location=None):

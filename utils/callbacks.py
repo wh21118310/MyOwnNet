@@ -6,14 +6,7 @@
 @File : callbacks
 @Description : 
 """
-import datetime
 import logging
-import os
-
-import torch
-import matplotlib
-
-matplotlib.use('Agg')
 
 
 def initial_logger(file):
@@ -69,3 +62,39 @@ class AverageMeter(object):
 
     def average(self):
         return self.avg
+
+
+def draw(Total_epoch, train_loss_total_epochs, valid_loss_total_epochs, epoch_lr, epoch_iou, logs_path):
+    import matplotlib
+    matplotlib.use("TkAgg")
+    from matplotlib import pyplot as plt
+    from utils.get_metric import smooth
+    x = [i for i in range(Total_epoch)]
+    fig = plt.figure(figsize=(12, 4))
+    ax = fig.add_subplot(2, 2, 1)
+    ax.plot(x, smooth(train_loss_total_epochs, 0.6), label='train loss')
+    ax.plot(x, smooth(valid_loss_total_epochs, 0.6), label='val loss')
+    ax.set_xlabel('Epoch', fontsize=15)
+    ax.set_ylabel('Loss', fontsize=15)
+    ax.set_title('train curve', fontsize=15)
+    ax.grid(True)
+    plt.legend(loc='upper right', fontsize=15)
+
+    ax = fig.add_subplot(2, 2, 2)
+    ax.plot(x, epoch_lr, label='Learning Rate')
+    ax.set_xlabel('Epoch', fontsize=15)
+    ax.set_ylabel('Learning Rate', fontsize=15)
+    ax.set_title('lr curve', fontsize=15)
+    ax.grid(True)
+    plt.legend(loc='upper right', fontsize=15)
+
+    ax = fig.add_subplot(2, 2, 3)
+    ax.plot(x, epoch_iou, label="FwIoU")
+    ax.set_xlabel("Epoch", fontsize=15)
+    ax.set_ylabel("FwIoU", fontsize=15)
+    ax.set_title("FwIoU index", fontsize=15)
+    ax.grid(True)
+    plt.legend(loc='upper right', fontsize=15)
+    plt.tight_layout()
+    plt.savefig(logs_path + "./train_val.png")
+    print("save plot in ", logs_path)

@@ -10,76 +10,49 @@ import copy
 import os
 from os.path import join, exists
 
-import numpy as np
 import torch
-from torch.backends import cudnn
+from timm.utils import ModelEma, get_state_dict
+
 from torch.cuda.amp import autocast
-from torch.nn import DataParallel
-from torch.nn.parallel import DistributedDataParallel
+
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DistributedSampler, DataLoader
 from tqdm import tqdm
 
+from nets.PFNet import PFNet
 from nets.backbone.Swin_transformer import SwinNet
 from nets.backbone.convnext import ConvNeXt_Seg
-from utils.arguments import get_args_parser, get_scaler, get_opt_and_scheduler, get_criterion, check_path, seed_torch
-from utils.callbacks import initial_logger, AverageMeter
+from utils.arguments import get_scaler, get_opt_and_scheduler, get_criterion, check_path, seed_torch, \
+    distributedTraining, model_load, get_mixup, ModelToCuda
+from utils.callbacks import initial_logger, AverageMeter, draw
 from utils.data_process import weights_init, MarineFarmData
-from utils.get_metric import binary_accuracy, Acc, FWIoU, smooth
+from utils.get_metric import binary_accuracy, Acc, FWIoU
 from utils.transform import transforms
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 
-params = get_args_parser()
+# params = get_args_parser()
 
 '''Loading Model'''
-model_name = 'Swin'
-model_path = ""
-pretrained = False
 seed_torch(seed=2022)
-# backbone = DeepLab(num_classes=2, backbone="mobilenet", pretrained=pretrained, downsample_factor=32)
+model_name = 'PF_swinT_base'
 # model = ConvNeXt_Seg(3, 3)
-model = SwinNet(3, 3, "base")
-Cuda, local_rank, distributed, device, GPU_Count = params['cuda'], params['local_rank'], params["distributed"], params[
-    "device"], params["GPU_Count"]
+# model = SwinNet(3, 3, "base")
+model = PFNet(bk='swinT_base')
+Cuda = True
+distributed = False
+pretrained = False
+model_path = ""
+local_rank, device, GPU_Count = distributedTraining(distributed)
 if not pretrained:
     weights_init(model)
-if model_path != "":
-    if local_rank == 0:
-        print('Load weights {}\n'.format(model_path))
-    # ------------------------------------------------------#
-    #   根据预训练权重的Key和模型的Key进行加载
-    # ------------------------------------------------------#
-    model_dict = model.state_dict()
-    pretrained_dict = torch.load(model_path, mpa_location=params["device"])
-    load_key, no_load_key, temp_dict = [], [], {}
-    for k, v in pretrained_dict.items():
-        if k in model_dict.keys() and np.shape(model_dict[k]) == np.shape(v):
-            temp_dict[k] = v
-            load_key.append(k)
-        else:
-            no_load_key.append(k)
-    model_dict.update(temp_dict)
-    model.load_state_dict(model_dict)
-    # ------------------------------------------------------#
-    #   显示没有匹配上的Key
-    # ------------------------------------------------------#
-    if local_rank == 0:
-        print("\nSuccessful Load Key:", str(load_key)[:500], "……\nSuccessful Load Key Num:", len(load_key))
-        print("\nFail To Load Key:", str(no_load_key)[:500], "……\nFail To Load Key num:", len(no_load_key))
-        print("\n\033[1;33;44m温馨提示，head部分没有载入是正常现象，Backbone部分没有载入是错误的。\033[0m")
-if Cuda:
-    if distributed:
-        model = model.cuda(local_rank)
-        model = DistributedDataParallel(model, device_ids=[local_rank], find_unused_parameters=True)
-    else:
-        model = DataParallel(model)
-        cudnn.benchmark = True  # 当模型架构保持不变以及输入大小保持不变时可使用
-        model = model.cuda()
+model = model_load(model, model_path, local_rank, device)
+model = ModelToCuda(Cuda, distributed, model, local_rank)
 
 '''Loading Datasets'''
-batch_size = params['batch_size']
+# batch_size = params['batch_size']
+batch_size = 10
 data_dir = r"dataset/MarineFarm"
 train_imgs_dir, val_imgs_dir, test_imgs_dir = join(data_dir, "trainval/images"), join(data_dir, "trainval/images"), \
                                               join(data_dir, "test/images")
@@ -105,11 +78,29 @@ else:
 num_workers = 0
 train_loader = DataLoader(train_data, shuffle=shuffle, batch_size=batch_size,
                           num_workers=num_workers, sampler=train_sampler, pin_memory=True)
-val_loader = DataLoader(val_data, shuffle=shuffle, batch_size=batch_size,
+val_loader = DataLoader(val_data, shuffle=shuffle, batch_size=int(1.5 * batch_size),
                         num_workers=num_workers, sampler=val_sampler, pin_memory=True)
-test_loader = DataLoader(test_data, shuffle=shuffle, batch_size=batch_size,
+test_loader = DataLoader(test_data, shuffle=shuffle, batch_size=int(1.5 * batch_size),
                          num_workers=num_workers, sampler=test_sampler, pin_memory=True)
 trainLoader_size, valLoader_size, testLoader_size = len(train_loader), len(val_loader), len(test_loader)
+
+'''MixUp Strategy'''
+smooth = 0.1
+mixup, cutmix, cutmix_minmax, mixup_prob, mixup_switch_prob, mixup_mode = 0.8, 1.0, None, 1.0, 0.5, "batch"
+mixup_fn = get_mixup(mixup, cutmix, cutmix_minmax, mixup_prob, mixup_switch_prob, mixup_mode, smooth, num_classes=2)
+
+'''Loading criterion'''
+criterion_name = "bcew"
+criterion, mixup_fn = get_criterion(loss_name=criterion_name, mixup=mixup_fn, smoothing=smooth, is_gpu=Cuda)
+'''EMA Strategy'''
+model_ema = False
+model_ema_decay = 0.999
+model_ema_force_cpu = False
+# model_ema_eval = False
+ema = None
+if model_ema:
+    ema = ModelEma(model, decay=model_ema_decay, device='cpu' if model_ema_force_cpu else '', resume='')
+    print("Using EMA with decay = %.8f" % model_ema_decay)
 
 '''Loading Optimizer and Scheduler'''
 optimizer_type = "sgd"
@@ -121,10 +112,6 @@ optimizer, scheduler = get_opt_and_scheduler(model=model, optimizer_type=optimiz
 fp16 = True
 scaler = get_scaler(fp16)
 
-'''Loading criterion'''
-criterion_name = "bcew"
-criterion = get_criterion(loss_name=criterion_name, is_gpu=Cuda)
-
 '''Save Path'''
 nowPath = os.getcwd()
 save_dir = join(nowPath, 'out', model_name)  # 权值与日志文件保存的文件夹
@@ -133,9 +120,9 @@ save_ckpt_dir, save_log_dir = join(save_dir, 'ckpt'), join(save_dir, 'log')
 best_ckpt = join(save_ckpt_dir, 'best_model.pth')
 check_path(save_ckpt_dir)
 check_path(save_log_dir)
-'''For Epoch'''
-epoch_start, Total_epoch = params["Init_Epoch"], params["Total_Epoch"]
-'''For Restart'''
+'''For Epoch & Restart'''
+# epoch_start, Total_epoch = params["Init_Epoch"], params["Total_Epoch"]
+epoch_start, Total_epoch = 0, 100
 Resume = False  # used for discriminate the status from the breakpoint or start
 # support for the restart from breakpoint
 if Resume and exists(best_ckpt):
@@ -149,13 +136,13 @@ if Resume and exists(best_ckpt):
 logger = initial_logger(join(save_log_dir, model_name + '.log'))
 '''Main Iteration'''
 train_loss_total_epochs, valid_loss_total_epochs, epoch_lr = list(), list(), list()
-
+epoch_iou = list()  # save index
 '''Train & val'''
-plot = True
 clip_grad = False
-best_iou, best_epoch, best_mpa = 0.5, 0, 0.5
+best_iou, best_epoch, best_mpa = .5, 0, .5
 last_index, save_iter = 0., 0
 save_inter, min_inter = 10, 10  # 用来存模型
+last_file = None
 logger.info('Total Epoch:{} Training num:{}  Validation num:{}'.format(
     Total_epoch, train_data_size, valid_data_size))
 for epoch in range(epoch_start, Total_epoch):
@@ -169,6 +156,8 @@ for epoch in range(epoch_start, Total_epoch):
             image = image.to(dtype=torch.float32, non_blocking=True)
             label = label.cuda(local_rank)
             label = label.to(dtype=torch.float32, non_blocking=True)
+        if mixup_fn is not None:
+            image, label = mixup_fn(image, label)
         if scaler is None:
             outputs = model(image)
             loss = criterion(outputs, label)
@@ -179,13 +168,15 @@ for epoch in range(epoch_start, Total_epoch):
         else:
             with autocast():
                 outputs = model(image)
-                loss = criterion(outputs, label)
+                loss = criterion(outputs.squeeze(1), label)
             scaler.scale(loss).backward()
             if clip_grad:
                 clip_grad_norm_(model.parameters(), max_norm=10, norm_type=2)
             scaler.step(optimizer)
             scaler.update()
         optimizer.zero_grad(set_to_none=True)
+        if ema is not None:
+            ema.update(model)
         scheduler.step(epoch + batch_idx / trainLoader_size)  # called after every batch update
         # scheduler.step()  # when use stepLR
         train_main_loss.update(loss.cpu().detach().numpy())
@@ -195,6 +186,7 @@ for epoch in range(epoch_start, Total_epoch):
             logger.info('[train] epoch:{} iter:{}/{} lr:{:.4f} loss:{:.4f}'.format(
                 epoch, batch_idx, trainLoader_size, optimizer.param_groups[-1]['lr'], train_main_loss.average()))
     torch.cuda.empty_cache()
+    torch.cuda.synchronize()
     model.eval()
     val_bar = tqdm(val_loader)
     val_loss = AverageMeter()
@@ -208,8 +200,10 @@ for epoch in range(epoch_start, Total_epoch):
                 label = label.cuda(local_rank)
                 image = image.to(dtype=torch.float32, non_blocking=True)
                 label = label.to(dtype=torch.float32, non_blocking=True)
+            if mixup_fn is not None:
+                image, label = mixup_fn(image, label)
             outputs = model(image)
-            loss = criterion(outputs, label)
+            loss = criterion(outputs.squeeze(1), label)
             val_loss.update(loss.cpu().detach().numpy())
             val_bar.set_description(desc='[val] epoch:{} iter:{}/{} loss:{:.4f}'.format(
                 epoch, batch_idx, valLoader_size, val_loss.average()))
@@ -234,20 +228,27 @@ for epoch in range(epoch_start, Total_epoch):
     # save Model
     save_iter += 1
     if fwIoU_meter.average() > best_iou or (epoch % save_inter == 0 and epoch > min_inter) or save_iter > 3:
-        state = {'epoch': epoch, 'backbone': model.state_dict(), 'optimizer': optimizer.state_dict()}
+        state = {'epoch': epoch, 'model': model.state_dict(), 'optimizer': optimizer.state_dict()}
+        if ema is not None:
+            state['model_ema'] = get_state_dict(ema)
         if last_index == 0.:
             filename = join(save_ckpt_dir, 'ckpt-epoch{}_fwiou{:.3f}.pth'.format(epoch, fwIoU_meter.avg * 100))
             torch.save(state, filename, _use_new_zipfile_serialization=False)
             last_index = fwIoU_meter.average()
             save_iter = 0
+            last_file = filename
         elif fwIoU_meter.average() - last_index >= 0.001 or save_iter >= 3:
             filename = join(save_ckpt_dir, 'ckpt-epoch{}_fwiou{:.3f}.pth'.format(best_epoch, fwIoU_meter.avg * 100))
             torch.save(state, filename, _use_new_zipfile_serialization=False)
+            if exists(last_file):
+                os.remove(last_file)
+            last_file = filename
             last_index = fwIoU_meter.average()
             save_iter = 0
-        print(last_index)
         if fwIoU_meter.average() > best_iou:
             best_filename = join(save_ckpt_dir, 'best_model.pth')
+            if exists(best_filename):  # del old
+                os.remove(best_filename)
             torch.save(state, best_filename, _use_new_zipfile_serialization=False)
             best_iou = fwIoU_meter.average()
             best_mode = copy.deepcopy(model)
@@ -255,32 +256,11 @@ for epoch in range(epoch_start, Total_epoch):
             logger.info('[save] Best Model saved at epoch:{}, fwIou:{}'.format(best_epoch, fwIoU_meter.average()))
     if mpa_meter.average() > best_mpa:
         best_mpa = mpa_meter.average()
+    epoch_iou.append(fwIoU_meter.average())
     # 显示loss
     print("best_epoch:{}, nowIoU: {:.4f}, bestIoU:{:.4f}, now_mPA:{:.4f}, best_mPA:{:.4f}\n"
           .format(best_epoch, fwIoU_meter.average() * 100, best_iou * 100, mpa_meter.average() * 100, best_mpa * 100))
 
-import matplotlib
-
-matplotlib.use("TkAgg")
-from matplotlib import pyplot as plt
-
+plot = True
 if plot:
-    x = [i for i in range(Total_epoch)]
-    fig = plt.figure(figsize=(12, 4))
-    ax = fig.add_subplot(1, 2, 1)
-    ax.plot(x, smooth(train_loss_total_epochs, 0.6), label='train loss')
-    ax.plot(x, smooth(valid_loss_total_epochs, 0.6), label='val loss')
-    ax.set_xlabel('Epoch', fontsize=15)
-    ax.set_ylabel('Loss', fontsize=15)
-    ax.set_title('train curve', fontsize=15)
-    ax.grid(True)
-    plt.legend(loc='upper right', fontsize=15)
-    ax = fig.add_subplot(1, 2, 2)
-    ax.plot(x, epoch_lr, label='Learning Rate')
-    ax.set_xlabel('Epoch', fontsize=15)
-    ax.set_ylabel('Learning Rate', fontsize=15)
-    ax.set_title('lr curve', fontsize=15)
-    ax.grid(True)
-    plt.legend(loc='upper right', fontsize=15)
-    plt.tight_layout()
-    plt.savefig(save_log_dir+"./train_val.png")
+    draw(Total_epoch, train_loss_total_epochs, valid_loss_total_epochs, epoch_lr, epoch_iou, save_log_dir)

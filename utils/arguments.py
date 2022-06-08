@@ -14,10 +14,11 @@ from os.path import join
 
 import cv2
 import numpy as np
-import torch.cuda
-import torch.distributed as dist
+import torch
 from pytorch_toolbelt.losses import JointLoss
 from segmentation_models_pytorch.losses import *
+from segmentation_models_pytorch.utils.losses import CrossEntropyLoss
+from timm.loss import SoftTargetCrossEntropy, LabelSmoothingCrossEntropy
 from torch import optim
 from torch.nn import BCELoss, MSELoss, BCEWithLogitsLoss
 from torch.optim.lr_scheduler import StepLR, CosineAnnealingWarmRestarts
@@ -25,6 +26,7 @@ from timm.scheduler import CosineLRScheduler
 
 
 # set seeds
+
 def seed_torch(seed=2021):
     random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
@@ -50,19 +52,12 @@ def save_hotmpas(img, epoch, idx, save_path):
 
 def check_path(Path):
     if not os.path.exists(Path):
-        os.makedirs(Path)
-    else:
-        pass
+        os.makedirs(Path, exist_ok=True)
 
 
 '''
 1. CUDA、Parallel Setting
 '''
-# ---------------------------------#
-#   Cuda    whether use Cuda
-#           if no GPU, set this as False,Please!
-# ---------------------------------#
-Cuda = True
 # ---------------------------------------------------------------------#
 #   distributed     whether to use a single MultiGPU distributed running system
 #                   Terminal command just support Ubuntu. CUDA_VISIBLE_DEVICES used to specify a GPU under Ubuntu
@@ -75,29 +70,84 @@ Cuda = True
 #       Input in Terminal    CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.launch --nproc_per_node=2 train.py
 # ---------------------------------------------------------------------#
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-ngpus_per_node = torch.cuda.device_count()
-distributed = False
-if distributed:
-    dist.init_process_group(backend="nccl")
-    local_rank = int(os.environ["LOCAL_RANK"])
-    rank = int(os.environ["RANK"])
-    device = torch.device("cuda", local_rank)
-    if local_rank == 0:
-        print(f"[{os.getpid()}] (rank = {rank}, local_rank = {local_rank}) training...")
-        print("Gpu Device Count : ", ngpus_per_node)
-else:
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    local_rank = 0
-# ---------------------------------------------------------------------#
-#   sync_bn     whether to use sync_bn in DDP multiGPU mode
-# ---------------------------------------------------------------------#
-if distributed:
-    sync_bn = True
-else:
-    sync_bn = False
+
+
+def get_sync(distributed: bool) -> bool:
+    # ---------------------------------------------------------------------#
+    #   sync_bn     whether to use sync_bn in DDP multiGPU mode
+    # ---------------------------------------------------------------------#
+    if distributed:
+        sync_bn = True
+    else:
+        sync_bn = False
+    return sync_bn
+
+
+def distributedTraining(distributed: bool):
+    from torch.cuda import device_count
+    import torch.distributed as dist
+    ngpus_per_node = device_count()
+    if distributed:
+        dist.init_process_group(backend="nccl")
+        local_rank = int(os.environ["LOCAL_RANK"])
+        rank = int(os.environ["RANK"])
+        device = torch.device("cuda", local_rank)
+        if local_rank == 0:
+            print("[{os.getpid()}] (rank = {rank}, local_rank = {local_rank}) training...")
+            print("Gpu Device Count : ", ngpus_per_node)
+        sync_bn = get_sync(distributed)
+        return local_rank, device, ngpus_per_node, sync_bn
+    else:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        local_rank = 0
+        return local_rank, device, ngpus_per_node
+
+
+def model_load(model, model_path, local_rank, device):
+    if model_path != "":
+        if local_rank == 0:
+            print('Load weights {}\n'.format(model_path))
+        # ------------------------------------------------------#
+        #   根据预训练权重的Key和模型的Key进行加载
+        # ------------------------------------------------------#
+        model_dict = model.state_dict()
+        pretrained_dict = torch.load(model_path, mpa_location=device)
+        load_key, no_load_key, temp_dict = [], [], {}
+        for k, v in pretrained_dict.items():
+            if k in model_dict.keys() and np.shape(model_dict[k]) == np.shape(v):
+                temp_dict[k] = v
+                load_key.append(k)
+            else:
+                no_load_key.append(k)
+        model_dict.update(temp_dict)
+        model.load_state_dict(model_dict)
+        # ------------------------------------------------------#
+        #   显示没有匹配上的Key
+        # ------------------------------------------------------#
+        if local_rank == 0:
+            print("\nSuccessful Load Key:", str(load_key)[:500], "……\nSuccessful Load Key Num:", len(load_key))
+            print("\nFail To Load Key:", str(no_load_key)[:500], "……\nFail To Load Key num:", len(no_load_key))
+            print("\n\033[1;33;44m温馨提示，head部分没有载入是正常现象，Backbone部分没有载入是错误的。\033[0m")
+    return model
+
+
+def ModelToCuda(Cuda, distributed, model, local_rank):
+    from torch.backends import cudnn
+    from torch.nn import DataParallel
+    from torch.nn.parallel import DistributedDataParallel
+    if Cuda:
+        if distributed:
+            model = model.cuda(local_rank)
+            model = DistributedDataParallel(model, device_ids=[local_rank], find_unused_parameters=True)
+        else:
+            model = DataParallel(model)
+            cudnn.benchmark = True  # 当模型架构保持不变以及输入大小保持不变时可使用
+            model = model.cuda()
+    return model
+
 
 '''
-2. Other Settings.
+Training Settings.
 '''
 # --------------------------------------------------------------------#
 # 训练分两个阶段，分别冻结与解冻阶段。设定冻结阶段是为了满足机器性能不足的同学的训练需求。
@@ -144,12 +194,15 @@ Unfreeze_batch_size = 10  # 模型解冻后的batch_size
 # -------------------------------------------------------------------#
 batch_size = Freeze_batch_size if Freeze_Train else Unfreeze_batch_size
 
-
+'''Optimizer & Scheduler
 # ------------------------------------------------------------------#
 #   optimizer_type  使用到的优化器种类，可选的有adam、sgd
 #   momentum        优化器内部使用到的momentum参数
 #   weight_decay    权值衰减，可防止过拟合。adam会导致weight_decay错误，使用adam时建议设置为0。
 # ------------------------------------------------------------------#
+'''
+
+
 def get_opt_and_scheduler(model, optimizer_type: str, lr_decay_type: str, momentum: float, Total_epoch=100):
     weight_decay = {"sgd": 1e-4, "adam": 0}[optimizer_type]
     # ------------------------------------------------------------------#
@@ -171,18 +224,23 @@ def get_opt_and_scheduler(model, optimizer_type: str, lr_decay_type: str, moment
     # ------------------------------------------------------------------#
     scheduler = {
         'cos': CosineLRScheduler(optimizer, t_initial=int(Total_epoch / 3), t_mul=1.0, lr_min=Min_lr,
-                                 decay_rate=0.9, warmup_t=0, warmup_lr_init=Init_lr*0.1, cycle_limit=10),
-        "cosW": CosineAnnealingWarmRestarts(optimizer, T_0=int(Total_epoch/3), T_mult=1, eta_min=Min_lr, last_epoch=-1),
+                                 decay_rate=0.9, warmup_t=0, warmup_lr_init=Init_lr * 0.1, cycle_limit=10),
+        "cosW": CosineAnnealingWarmRestarts(optimizer, T_0=int(Total_epoch / 3), T_mult=1, eta_min=Min_lr,
+                                            last_epoch=-1),
         # lr = 0.05 if epoch < 30; lr= 0.005 if 30 <= epoch < 60; lr = 0.0005 if 60 <= epoch < 90
         'steplr': StepLR(optimizer, step_size=int(Total_epoch / 3), gamma=0.9)
     }[lr_decay_type]
     return optimizer, scheduler
 
 
+'''Scaler
 # ---------------------------------------------------------------------#
 #   fp16        是否使用混合精度训练,可减少约一半的显存、需要pytorch1.7.1以上
 #   torch 1.2不支持amp，建议使用torch 1.7.1及以上正确使用fp16
 # ---------------------------------------------------------------------#
+'''
+
+
 def get_scaler(fp16):
     if fp16:
         from torch.cuda.amp import GradScaler as GradScaler
@@ -193,63 +251,94 @@ def get_scaler(fp16):
     return scaler
 
 
+'''Loss
 # -----------------------------------------------------------------#
-# focal loss用于防止正负样本不平衡。dice loss建议种类少或种类多但batchsize大时，设定为True；种类多但batchsize较小，设定为False
+# focal loss用于防止正负样本不平衡。
+# dice loss建议种类少或种类多但batchsize大时，设定为True；种类多但batchsize较小，设定为False
 # 其他可选的Loss:
 #             MSELoss(reduction="mean")
 #             TverskyLoss(mode="multiclass")
 #             JaccardLoss(mode="multiclass")
 # -------------------------------------------------------------------#
+'''
+
+
 def get_loss(loss_name: str):
     losses = loss_name.split('+')
     return losses
 
 
-# def get_criterion(base: str, focal: bool, dice: bool, is_gpu=True, mode="binary"):
-def get_criterion(loss_name, is_gpu=True, mode="binary"):
+def use_ce(mixup=None, smoothing=0.):
+    if mixup is not None:
+        return SoftTargetCrossEntropy()
+    elif smoothing > 0.:
+        return LabelSmoothingCrossEntropy(smoothing=smoothing)
+    else:
+        return CrossEntropyLoss()
+
+
+def get_criterion(loss_name, mixup=None, smoothing=0., is_gpu=True, mode="binary"):
     losses = {
         "bce": BCELoss(),
         'bcew': BCEWithLogitsLoss(),
         'focal': FocalLoss(mode=mode),
         'dice': DiceLoss(mode=mode),
         'jaccard': JaccardLoss(mode=mode),
-        'lovasz': LovaszLoss(mode=mode)
+        'lovasz': LovaszLoss(mode=mode),
+        'ce': use_ce(mixup, smoothing)
     }
     loss_names = get_loss(loss_name)
-    if len(loss_names) == 1:
-        loss_name = loss_names[0]
-        criterion = losses[loss_name]
-    else:
-        loss = loss_names[0]
-        criterion = losses[loss]
+    loss_name = loss_names[0]
+    criterion = losses[loss_name]
+    if len(loss_names) > 1:
         for name in loss_names[1:]:
             loss = losses[name]
             criterion = JointLoss(criterion, loss, first_weight=1., second_weight=1.)
     if is_gpu:
         criterion = criterion.cuda()
-    return criterion
+    if 'ce' not in loss_names:
+        mixup = None
+    else:
+        print("Mixup is Activated!")
+    return criterion, mixup
 
 
-def get_args_parser():
-    # trainingPath = "../dataset"
-    params = dict()
-    GPU_Settings = {"cuda": Cuda, "device": device, "local_rank": local_rank, "GPU_Count": ngpus_per_node,
-                    "distributed": distributed}
-    if sync_bn:
-        GPU_Settings.update({"sync_bn": sync_bn})
-    params.update(GPU_Settings)
-    # Setting the training about FreeTraining、Init_Epoch、Total_Epoch、UnFreeze_Batch etc.
-    Training_Settings = {"Freeze": Freeze_Train, "Init_Epoch": Init_Epoch, "Total_Epoch": Total_Epoch,
-                         "UnFreeze_Batch": Unfreeze_batch_size, "batch_size": batch_size}
-    if Freeze_Train:
-        Training_Settings.update({"Freeze_Epoch": Freeze_Epoch, "Freeze_batch": Freeze_batch_size})
-    params.update(Training_Settings)
-    return params
+'''MixUp
+#----------------------------
+# Used from Timm, Setting from ConvNeXt
+#---------------------------
+'''
 
 
-if __name__ == '__main__':
-    params = get_args_parser()
-    print(params)
-    # losses = "bcew+focal+dice"
-    # loss = get_criterion(losses)
-    # print(loss)
+def get_mixup(mixup=0.8, cutmix=1.0, cutmix_minmax=None, mixup_prob=1.0, mixup_switch_prob=0.5, mixup_mode='batch',
+              smoothing=0.1, num_classes=2):
+    from timm.data import Mixup
+    mixup_active = mixup > 0 or cutmix > 0. or cutmix_minmax is not None
+    if mixup_active:
+        mixup_fn = Mixup(mixup_alpha=mixup, cutmix_alpha=cutmix, cutmix_minmax=cutmix_minmax, prob=mixup_prob,
+                         switch_prob=mixup_switch_prob, mode=mixup_mode, label_smoothing=smoothing,
+                         num_classes=num_classes)
+    else:
+        mixup_fn = None
+    return mixup_fn
+
+# def get_args_parser():
+#     # trainingPath = "../dataset"
+#     params = dict()
+#     # Setting the training about FreeTraining、Init_Epoch、Total_Epoch、UnFreeze_Batch etc.
+#     Training_Settings = {"Freeze": Freeze_Train, "Init_Epoch": Init_Epoch, "Total_Epoch": Total_Epoch,
+#                          "batch_size": batch_size}
+#     if Freeze_Train:
+#         Training_Settings.update({"UnFreeze_Batch": Unfreeze_batch_size,
+#                                   "Freeze_Epoch": Freeze_Epoch,
+#                                   "Freeze_batch": Freeze_batch_size})
+#     params.update(Training_Settings)
+#     return params
+
+
+# if __name__ == '__main__':
+# params = get_args_parser()
+# print(params)
+# losses = "bcew+focal+dice"
+# loss = get_criterion(losses)
+# print(loss)

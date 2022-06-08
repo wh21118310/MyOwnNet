@@ -10,6 +10,7 @@ import torch.nn.functional as F
 from einops import rearrange
 from timm.models.layers import trunc_normal_, DropPath
 from timm.models.registry import register_model
+from torchinfo import summary
 
 
 class LayerNorm(nn.Module):
@@ -20,7 +21,7 @@ class LayerNorm(nn.Module):
     """
 
     def __init__(self, normalized_shape, eps=1e-6, data_format="channels_last"):
-        super().__init__()
+        super(LayerNorm, self).__init__()
         self.weight = nn.Parameter(torch.ones(normalized_shape))
         self.bias = nn.Parameter(torch.zeros(normalized_shape))
         self.eps = eps
@@ -53,7 +54,7 @@ class Block(nn.Module):
     """
 
     def __init__(self, dim, drop_path=0., layer_scale_init_value=1e-6):
-        super().__init__()
+        super(Block, self).__init__()
         self.dwconv = nn.Conv2d(dim, dim, kernel_size=7, padding=3, groups=dim)  # depthwise conv
         self.norm = LayerNorm(dim, eps=1e-6)
         self.pwconv1 = nn.Linear(dim, 4 * dim)  # pointwise/1x1 convs, implemented with linear layers
@@ -98,7 +99,7 @@ class ConvNeXtIsotropic(nn.Module):
     """
 
     def __init__(self, in_chans=3, depth=18, dim=384, drop_path_rate=0., layer_scale_init_value=0):
-        super().__init__()
+        super(ConvNeXtIsotropic, self).__init__()
 
         self.stem = nn.Conv2d(in_chans, dim, kernel_size=16, stride=16)
         dp_rates = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]
@@ -125,34 +126,22 @@ class ConvNeXtIsotropic(nn.Module):
         return x
 
 
-class UpDecoder(nn.Module):
-    def __init__(self, out_chans=3, dim=384):
-        super(UpDecoder, self).__init__()
-        self.Result = nn.Sequential(
-            nn.ConvTranspose2d(dim, out_chans, 16, 16),
-            LayerNorm(out_chans, eps=1e-6, data_format="channels_first"),
-            nn.Softmax(dim=1)
-        )
-
-    def forward(self, x):
-        return self.Result(x)
-
-
-class ConvNeXt_IsoTropic_ForSeg(nn.Module):
-    def __init__(self, in_chans=3, out_chans=3, depth=18, dim=384, **kwargs):
-        super(ConvNeXt_IsoTropic_ForSeg, self).__init__()
-        self.encoder = ConvNeXtIsotropic(in_chans=in_chans, depth=depth, dim=dim, **kwargs)
-        self.decoder = UpDecoder(out_chans=out_chans, dim=dim)
-
-    def forward(self, x):
-        x = self.encoder(x)
-        x = self.decoder(x)
-        return x
+# class UpDecoder(nn.Module):
+#     def __init__(self, out_chans=3, dim=384):
+#         super(UpDecoder, self).__init__()
+#         self.Result = nn.Sequential(
+#             nn.ConvTranspose2d(dim, out_chans, 16, 16),
+#             LayerNorm(out_chans, eps=1e-6, data_format="channels_first"),
+#             nn.Softmax(dim=1)
+#         )
+#
+#     def forward(self, x):
+#         return self.Result(x)
 
 
 @register_model
-def convnext_isotropic_small(in_channels=3, out_channels=3, pretrained=False, **kwargs):
-    model = ConvNeXt_IsoTropic_ForSeg(in_chans=in_channels, out_chans=out_channels, depth=18, dim=384, **kwargs)
+def convnext_isotropic_small(in_channels=3, pretrained=False, **kwargs):
+    model = ConvNeXtIsotropic(in_chans=in_channels, depth=18, dim=384, **kwargs)
     if pretrained:
         url = 'https://dl.fbaipublicfiles.com/convnext/convnext_iso_small_1k_224_ema.pth'
         checkpoint = torch.hub.load_state_dict_from_url(url=url, map_location="cpu")
@@ -161,8 +150,8 @@ def convnext_isotropic_small(in_channels=3, out_channels=3, pretrained=False, **
 
 
 @register_model
-def convnext_isotropic_base(in_channels=3, out_channels=3, pretrained=False, **kwargs):
-    model = ConvNeXt_IsoTropic_ForSeg(in_chans=in_channels, out_chans=out_channels, depth=18, dim=768, **kwargs)
+def convnext_isotropic_base(in_channels=3, pretrained=False, **kwargs):
+    model = ConvNeXtIsotropic(in_chans=in_channels, depth=18, dim=768, **kwargs)
     if pretrained:
         url = 'https://dl.fbaipublicfiles.com/convnext/convnext_iso_base_1k_224_ema.pth'
         checkpoint = torch.hub.load_state_dict_from_url(url=url, map_location="cpu")
@@ -171,8 +160,8 @@ def convnext_isotropic_base(in_channels=3, out_channels=3, pretrained=False, **k
 
 
 @register_model
-def convnext_isotropic_large(in_channels=3, out_channels=3, pretrained=False, **kwargs):
-    model = ConvNeXt_IsoTropic_ForSeg(in_chans=in_channels, out_chans=out_channels, depth=36, dim=1024, **kwargs)
+def convnext_isotropic_large(in_channels=3, pretrained=False, **kwargs):
+    model = ConvNeXtIsotropic(in_chans=in_channels, depth=36, dim=1024, **kwargs)
     if pretrained:
         url = 'https://dl.fbaipublicfiles.com/convnext/convnext_iso_large_1k_224_ema.pth'
         checkpoint = torch.hub.load_state_dict_from_url(url=url, map_location="cpu")
@@ -208,12 +197,9 @@ def convnext_isotropic_large(in_channels=3, out_channels=3, pretrained=False, **
 #         checkpoint = torch.hub.load_state_dict_from_url(url=url, map_location="cpu")
 #         backbone.load_state_dict(checkpoint["backbone"], strict=False)
 #     return backbone
-
-
 if __name__ == '__main__':
-    data = torch.ones((4, 3, 512, 512))
-    # backbone = ConvNeXtIsotropic(3)
-    model = ConvNeXt_IsoTropic_ForSeg(3, 3)
-    with torch.no_grad():
-        out = model(data)
-    print(out.shape)
+    data = torch.rand((4, 3, 512, 512))
+    model = convnext_isotropic_base(3)
+    # layers = list(model.children())
+    # print(layers)
+    print(summary(model, (4, 3, 512, 512)))
