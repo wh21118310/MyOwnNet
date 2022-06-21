@@ -56,7 +56,7 @@ class SegmentationMetric(object):
         return mIoU
 
     def genConfusionMatrix(self, imgPredict, imgLabel):
-        # remove classes from unlabeled pixels in gt image and predict
+        # remove classes from unlabeled pixels in gt images and predict
         mask = (imgLabel >= 0) & (imgLabel < self.numClass)
         label = self.numClass * imgLabel[mask] + imgPredict[mask]
         count = np.bincount(label, minlength=self.numClass ** 2)

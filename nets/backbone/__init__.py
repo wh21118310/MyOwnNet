@@ -6,3 +6,6 @@
 @File : __init__.py
 @Description : 
 """
+from . import *
+import sys
+sys.path.append("..")

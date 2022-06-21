@@ -89,7 +89,7 @@ class ConvNeXtIsotropic(nn.Module):
         Isotropic ConvNeXts (Section 3.3 in paper)
 
     Args:
-        in_chans (int): Number of input image channels. Default: 3
+        in_chans (int): Number of input images channels. Default: 3
         num_classes (int): Number of classes for classification head. Default: 1000
         depth (tuple(int)): Number of blocks. Default: 18.
         dims (int): Feature dimension. Default: 384

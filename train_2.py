@@ -20,8 +20,9 @@ from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DistributedSampler, DataLoader
 from tqdm import tqdm
 
-from nets.PFNet import PFNet, PFNet_withPVT
+from nets.PFNet import PFNet
 from nets.SINet import SearchIdentificationNet as SInet
+from nets.SINet import SearchIdentificationNet_PVT as SINet_Pvt
 from nets.backbone.Swin_transformer import SwinNet
 from nets.backbone.convnext import ConvNeXt_Seg
 from utils.arguments import get_scaler, get_opt_and_scheduler, get_criterion, check_path, seed_torch, \
@@ -47,9 +48,9 @@ seed_torch(seed=2022)
 # model = SInet(bk="swinT_base")
 # model_name = 'SINet_res2net50_80'
 # model = SInet(bk='res2net50')
-model_name = 'PFNet_PVT_large_80'
-model = PFNet_withPVT(bk="large", img_size=512)
-gpu_id = "0"
+model_name = 'SINet_PVT_large_80'
+model = SINet_Pvt(bk='large', img_size=512)
+gpu_id = "1"
 Cuda = True
 distributed = False
 pretrained = True
@@ -98,7 +99,7 @@ train_loader = DataLoader(train_data, shuffle=shuffle, batch_size=batch_size,
 val_loader = DataLoader(val_data, shuffle=shuffle, batch_size=batch_size,
                         num_workers=num_workers, sampler=val_sampler, pin_memory=True)
 test_loader = DataLoader(test_data, shuffle=shuffle, batch_size=batch_size,
-                         num_workers=num_workers, sampler=test_sampler, pin_memory=True)
+                         num_workers=num_workers, sampler=test_sampler, pin_memory=True, drop_last=True)
 trainLoader_size, valLoader_size, testLoader_size = len(train_loader), len(val_loader), len(test_loader)
 
 '''MixUp Strategy'''

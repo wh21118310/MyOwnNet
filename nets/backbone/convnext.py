@@ -92,7 +92,7 @@ class ConvNeXt(nn.Module):
           https://arxiv.org/pdf/2201.03545.pdf
 
     Args:
-        in_chans (int): Number of input image channels. Default: 3
+        in_chans (int): Number of input images channels. Default: 3
         num_classes (int): Number of classes for classification head. Default: 1000
         depths (tuple(int)): Number of blocks at each stage. Default: [3, 3, 9, 3]
         dims (int): Feature dimension at each stage. Default: [96, 192, 384, 768]

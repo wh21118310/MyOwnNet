@@ -72,8 +72,8 @@ def window_reverse(windows, window_size: int, H: int, W: int):
     Args:
         windows: (num_windows*B, window_size, window_size, C)
         window_size (int): Window size(M)
-        H (int): Height of image
-        W (int): Width of image
+        H (int): Height of images
+        W (int): Width of images
     Returns:
         x: (B, H, W, C)
     """
@@ -472,7 +472,7 @@ class SwinTransformer(nn.Module):
           https://arxiv.org/pdf/2103.14030
     Args:
         patch_size (int | tuple(int)): Patch size. Default: 4
-        in_chans (int): Number of input image channels. Default: 3
+        in_chans (int): Number of input images channels. Default: 3
         num_classes (int): Number of classes for classification head. Default: 1000
         embed_dim (int): Patch embedding dimension,as C in paper. Default: 96
         depths (tuple(int)): Depth of each Swin Transformer layer.
@@ -504,7 +504,7 @@ class SwinTransformer(nn.Module):
         self.num_features = int(embed_dim * 2 ** (self.num_layers - 1))
         self.mlp_ratio = mlp_ratio
 
-        # split image into non-overlapping patches, patch Partition and Linear Embedding
+        # split images into non-overlapping patches, patch Partition and Linear Embedding
         self.patch_embed = PatchEmbed(
             patch_size=patch_size, in_c=in_chans, embed_dim=embed_dim,
             norm_layer=norm_layer if self.patch_norm else None)
@@ -619,36 +619,36 @@ params = {
 
 
 # a Simple Decoder
-class UperDecoder(nn.Module):
-    def __init__(self, out_chans=3, dims=None):
-        super(UperDecoder, self).__init__()
-        self.C4 = nn.Sequential(
-            nn.ConvTranspose2d(dims, int(dims / 2), 4, 2, 1),
-            LayerNorm(int(dims / 2), eps=1e-6),
-            nn.GELU()
-        )
-        self.C3 = nn.Sequential(
-            nn.ConvTranspose2d(int(dims / 2), int(dims / 4), 4, 2, 1),
-            LayerNorm(int(dims / 4), eps=1e-6),
-            nn.GELU()
-        )
-        self.C2 = nn.Sequential(
-            nn.ConvTranspose2d(int(dims / 4), int(dims / 8), 4, 2, 1),
-            LayerNorm(int(dims / 8), eps=1e-6),
-            nn.GELU()
-        )
-        self.out = nn.Sequential(
-            nn.ConvTranspose2d(int(dims / 8), out_channels=out_chans, kernel_size=8, stride=4, padding=2, bias=False),
-            LayerNorm(out_chans, eps=1e-6),
-            nn.GELU()
-        )
-
-    def forward(self, x):
-        x = self.C4(x)
-        x = self.C3(x)
-        x = self.C2(x)
-        result = self.out(x)
-        return result
+# class UperDecoder(nn.Module):
+#     def __init__(self, out_chans=3, dims=None):
+#         super(UperDecoder, self).__init__()
+#         self.C4 = nn.Sequential(
+#             nn.ConvTranspose2d(dims, int(dims / 2), 4, 2, 1),
+#             LayerNorm(int(dims / 2), eps=1e-6),
+#             nn.GELU()
+#         )
+#         self.C3 = nn.Sequential(
+#             nn.ConvTranspose2d(int(dims / 2), int(dims / 4), 4, 2, 1),
+#             LayerNorm(int(dims / 4), eps=1e-6),
+#             nn.GELU()
+#         )
+#         self.C2 = nn.Sequential(
+#             nn.ConvTranspose2d(int(dims / 4), int(dims / 8), 4, 2, 1),
+#             LayerNorm(int(dims / 8), eps=1e-6),
+#             nn.GELU()
+#         )
+#         self.out = nn.Sequential(
+#             nn.ConvTranspose2d(int(dims / 8), out_channels=out_chans, kernel_size=8, stride=4, padding=2, bias=False),
+#             LayerNorm(out_chans, eps=1e-6),
+#             nn.GELU()
+#         )
+#
+#     def forward(self, x):
+#         x = self.C4(x)
+#         x = self.C3(x)
+#         x = self.C2(x)
+#         result = self.out(x)
+#         return result
 
 
 def SwinNet(in_chans, Swin_type: str):

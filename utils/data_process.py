@@ -60,7 +60,7 @@ class MarineFarmData(Dataset):
 
         self.imgs_path = glob(os.path.join(self.imgs_dir, "*.png"))
         self.labels_path = glob(os.path.join(self.labels_dir, "*.png"))
-        assert len(self.labels_path) == len(self.imgs_path), "The numbers of labels is not compared to images"
+        # assert len(self.labels_path) == len(self.imgs_path), "The numbers of labels is not compared to images"
         self.ids = [os.path.splitext(file)[0] for file in self.imgs_path
                     if not file.startswith('.')]
         logging.info(r'Creating dataset with {len(self.ids)} examples')
@@ -69,16 +69,16 @@ class MarineFarmData(Dataset):
         return len(self.ids)
 
     def __getitem__(self, idx):
-        # get the idx-th image
+        # get the idx-th images
         image_path = self.imgs_path[idx]
-        # get the label correspond to the image
+        # get the label correspond to the images
         label_path = self.labels_path[idx]
-        # read the image and label
+        # read the images and label
         img = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         label = cv2.imread(label_path, cv2.IMREAD_UNCHANGED)
         label = cv2.cvtColor(label, cv2.COLOR_BGR2RGB)
-        # if want the result to get the 1d image
+        # if want the result to get the 1d images
         label = cv2.cvtColor(label, cv2.COLOR_RGB2GRAY)
         if self.transform:
             transformed = self.transform(image=img, mask=label)
@@ -108,11 +108,11 @@ class DataSetWithNosupervised(Dataset):
         return len(self.ids)
 
     def __getitem__(self, idx):
-        # get the idx-th image
+        # get the idx-th images
         image_path = self.imgs_path[idx]
-        # read the image and label
+        # read the images and label
         image = cv2.imread(image_path)
-        # if want the result to get the 1d image
+        # if want the result to get the 1d images
         if self.transform is not None:
             image = self.transform(image=image)
         return image

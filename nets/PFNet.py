@@ -17,64 +17,9 @@ from torchsummary import summary
 # ################## Backbone ######################
 ###################################################################
 from nets.backbone.Swin_transformer import SwinNet
+from nets.backbone.bk import Backbone
 from nets.backbone.convnext import ConvNeXt_Seg
 from nets.backbone.resnet import resnet50
-
-models_type1 = [
-            'resnet50', 'convnext_base',
-        ]
-
-
-class Backbone(nn.Module):
-    def __init__(self, bk="resnet50", pretrain=False, in_channels=3):
-        super(Backbone, self).__init__()
-        self.backbone = bk
-        if self.backbone == 'resnet50':
-            self.backbone = resnet50(pretrain)
-            self.layer1 = nn.Sequential(self.backbone.conv1, self.backbone.bn1, self.backbone.relu,
-                                        self.backbone.maxpool, self.backbone.layer1)
-            self.layer2 = self.backbone.layer2
-            self.layer3 = self.backbone.layer3
-            self.layer4 = self.backbone.layer4
-        elif self.backbone == 'convnext_base':
-            self.backbone = ConvNeXt_Seg(in_channels, model_type="base", pretrained=pretrain)
-            self.downsample = self.backbone.downsample_layers
-            self.stage = self.backbone.stages
-            self.layer1 = nn.Sequential(self.downsample[0], self.stage[0], self.backbone.norm0)
-            self.layer2 = nn.Sequential(self.downsample[1], self.stage[1], self.backbone.norm1)
-            self.layer3 = nn.Sequential(self.downsample[2], self.stage[2], self.backbone.norm2)
-            self.layer4 = nn.Sequential(self.downsample[3], self.stage[3], self.backbone.norm3)
-        elif self.backbone == 'swinT_base':
-            self.backbone = SwinNet(3, "base")
-            self.pos_drop = self.backbone.pos_drop
-            self.layers = self.backbone.layers
-            self.final_norm = self.backbone.norm
-            # self.layer1 = self.layers[0]
-            self.layer1 = self.backbone.patch_embed
-            self.layer2 = self.layers[0]
-            self.layer3 = self.layers[1]
-            self.layer4_1 = self.layers[2]
-            self.layer4_2 = self.layers[3]
-
-    def forward(self, x, model_type='resnet50'):
-        if model_type in models_type1:
-            layer1 = self.layer1(x)  # [-1, 256, h/4, w/4]
-            layer2 = self.layer2(layer1)  # [-1, 512, h/8, w/8]
-            layer3 = self.layer3(layer2)  # [-1, 1024, h/16, w/16]
-            layer4 = self.layer4(layer3)  # [-1, 2048, h/32, w/32]
-            return layer1, layer2, layer3, layer4
-        elif model_type == "swinT_base":
-            x, H, W = self.layer1(x)
-            x = self.pos_drop(x)
-            layer1 = rearrange(x, " b (h w) c-> b c h w", h=H, w=W)
-            x, H, W = self.layer2(x, H, W)
-            layer2 = rearrange(x, " b (h w) c-> b c h w", h=H, w=W)
-            x, H, W = self.layer3(x, H, W)
-            layer3 = rearrange(x, " b (h w) c-> b c h w", h=H, w=W)
-            x, H, W = self.layer4_1(x, H, W)
-            x, H, W = self.layer4_2(x, H, W)
-            layer4 = rearrange(x, " b (h w) c-> b c h w", h=H, w=W)
-            return layer1, layer2, layer3, layer4
 
 
 ###################################################################
@@ -289,6 +234,14 @@ class Focus(nn.Module):
 ###################################################################
 # ########################## NETWORK ##############################
 ###################################################################
+backbone_names1 = [  # C: 2048,1024,512,256
+    'resnet50', 'res2net50',
+]
+backbone_names2 = [  # C: 1024,512,256,128
+    'convnext_base', 'swinT_base'
+]
+
+
 class PFNet(nn.Module):
     def __init__(self, pretrain=False, bk='resnet50'):
         super(PFNet, self).__init__()
@@ -297,32 +250,31 @@ class PFNet(nn.Module):
         # backbone
         self.backbone = Backbone(bk=bk, pretrain=pretrain)
 
-        # channel reduction
-        if bk == 'resnet50':
+        if bk in backbone_names1:
+            # channel reduction
             self.cr4 = nn.Sequential(nn.Conv2d(2048, 512, 3, 1, 1), nn.BatchNorm2d(512), nn.ReLU())
             self.cr3 = nn.Sequential(nn.Conv2d(1024, 256, 3, 1, 1), nn.BatchNorm2d(256), nn.ReLU())
             self.cr2 = nn.Sequential(nn.Conv2d(512, 128, 3, 1, 1), nn.BatchNorm2d(128), nn.ReLU())
             self.cr1 = nn.Sequential(nn.Conv2d(256, 64, 3, 1, 1), nn.BatchNorm2d(64), nn.ReLU())
-        elif bk in ['convnext_base', 'swinT_base']:
+            # positioning
+            self.positioning = Positioning(512)
+            # focus
+            self.focus3 = Focus(256, 512)
+            self.focus2 = Focus(128, 256)
+            self.focus1 = Focus(64, 128)
+        elif bk in backbone_names2:
+            # channel reduction
             self.cr4 = nn.Sequential(nn.Conv2d(1024, 256, 3, 1, 1), nn.BatchNorm2d(256), nn.ReLU())
             self.cr3 = nn.Sequential(nn.Conv2d(512, 128, 3, 1, 1), nn.BatchNorm2d(128), nn.ReLU())
             self.cr2 = nn.Sequential(nn.Conv2d(256, 64, 3, 1, 1), nn.BatchNorm2d(64), nn.ReLU())
             self.cr1 = nn.Sequential(nn.Conv2d(128, 32, 3, 1, 1), nn.BatchNorm2d(32), nn.ReLU())
-
-        # positioning
-        if bk == 'resnet50':
-            self.positioning = Positioning(512)
-        elif bk in ['convnext_base', 'swinT_base']:
+            # positioning
             self.positioning = Positioning(256)
-        # focus
-        if bk == 'resnet50':
-            self.focus3 = Focus(256, 512)
-            self.focus2 = Focus(128, 256)
-            self.focus1 = Focus(64, 128)
-        elif bk in ['convnext_base', 'swinT_base']:
+            # focus
             self.focus3 = Focus(128, 256)
             self.focus2 = Focus(64, 128)
             self.focus1 = Focus(32, 64)
+
         for m in self.modules():
             if isinstance(m, nn.ReLU):
                 m.inplace = True
@@ -359,9 +311,68 @@ class PFNet(nn.Module):
         return torch.sigmoid(predict1)
 
 
+from .backbone.Pyramid_Vision_Transformer import pvt_tiny, pvt_medium, pvt_large
+
+
+class PFNet_withPVT(nn.Module):
+    def __init__(self, bk='large', img_size=224):
+        super(PFNet_withPVT, self).__init__()
+        if bk == 'tiny':
+            self.backbone = pvt_tiny(inchans=3, F4=False, img_size=img_size)
+        elif bk == 'medium':
+            self.backbone = pvt_medium(inchans=3, F4=False, img_size=img_size)
+        elif bk == 'large':
+            self.backbone = pvt_large(inchans=3, F4=False, img_size=img_size)
+        # channel reduction
+        self.cr4 = nn.Sequential(nn.Conv2d(512, 128, 3, 1, 1), nn.BatchNorm2d(128), nn.ReLU())
+        self.cr3 = nn.Sequential(nn.Conv2d(320, 80, 3, 1, 1), nn.BatchNorm2d(80), nn.ReLU())
+        self.cr2 = nn.Sequential(nn.Conv2d(128, 32, 3, 1, 1), nn.BatchNorm2d(32), nn.ReLU())
+        self.cr1 = nn.Sequential(nn.Conv2d(64, 16, 3, 1, 1), nn.BatchNorm2d(16), nn.ReLU())
+        # positioning
+        self.positioning = Positioning(128)
+        # focus
+        self.focus3 = Focus(80, 128)
+        self.focus2 = Focus(32, 80)
+        self.focus1 = Focus(16, 32)
+
+        # for m in self.modules():
+        #     if isinstance(m, nn.ReLU):
+        #         m.inplace = True
+
+    def forward(self, x):
+        out1, out2, out3, out4 = self.backbone(x)
+        # channel reduction
+        cr4 = self.cr4(out4)
+        cr3 = self.cr3(out3)
+        cr2 = self.cr2(out2)
+        cr1 = self.cr1(out1)
+
+        # positioning
+        positioning, predict4 = self.positioning(cr4)
+
+        # focus
+        focus3, predict3 = self.focus3(cr3, positioning, predict4)
+        focus2, predict2 = self.focus2(cr2, focus3, predict3)
+        focus1, predict1 = self.focus1(cr1, focus2, predict2)
+
+        # rescale
+        # predict4 = F.interpolate(predict4, size=x.size()[2:], mode='bilinear', align_corners=True)
+        # predict3 = F.interpolate(predict3, size=x.size()[2:], mode='bilinear', align_corners=True)
+        # predict2 = F.interpolate(predict2, size=x.size()[2:], mode='bilinear', align_corners=True)
+        predict1 = F.interpolate(predict1, size=x.size()[2:], mode='bilinear', align_corners=True)
+
+        if self.training:
+            # return predict4, predict3, predict2, predict1
+            return predict1
+        # return torch.sigmoid(predict4), torch.sigmoid(predict3), torch.sigmoid(predict2), torch.sigmoid(
+        #     predict1)
+        return torch.sigmoid(predict1)
+
+
 if __name__ == '__main__':
     data = torch.rand((4, 3, 512, 512)).cuda()
-    net = PFNet(bk='swinT_base').cuda()
+    # net = PFNet(bk='swinT_base').cuda()
     # net = PFNet()
+    net = PFNet_withPVT(bk='large').cuda()
     result = net(data)
     print(result)
