@@ -10,6 +10,7 @@
 """
 import torch
 import torch.nn as nn
+from torchinfo import summary
 
 try:
     from torch.hub import load_state_dict_from_url
@@ -264,7 +265,7 @@ def resnet50(pretrained=True, **kwargs):
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
-    return _resnet('resnet50', Bottleneck, [3, 4, 6, 3], pretrained,  **kwargs)
+    return _resnet('resnet50', Bottleneck, [3, 4, 6, 3], pretrained, **kwargs)
 
 
 def resnet101(pretrained=False, **kwargs):
@@ -345,3 +346,18 @@ def wide_resnet101_2(pretrained=False, **kwargs):
     """
     kwargs['width_per_group'] = 64 * 2
     return _resnet('wide_resnet101_2', Bottleneck, [3, 4, 23, 3], pretrained, **kwargs)
+
+
+if __name__ == '__main__':
+    data = torch.rand((4, 3, 512, 512))
+    backbone = resnet50(pretrained=False).cuda()
+    result = summary(backbone, data.size())
+    print(result)
+    # backbone = ConvNeXt().cuda()
+    # result = summary(backbone, data.size())
+    # print(result)
+    # with torch.no_grad():
+    #     out = backbone(data)
+    # down = UperDecoder()
+    # result = down(out)
+    # print(result)

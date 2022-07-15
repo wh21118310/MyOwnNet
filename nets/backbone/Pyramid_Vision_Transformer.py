@@ -17,7 +17,7 @@ from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 import sys
 
 sys.path.append("..")
-from ..attention.SRAttention import SpacialReductionAttention as SRA
+from attention.SRAttention import SpacialReductionAttention as SRA
 
 
 class MLP(nn.Module):
