@@ -13,7 +13,7 @@ from torch import nn
 import torch.nn.functional as F
 from torchinfo import summary
 
-from bk import Backbone
+from nets.backbone.bk import Backbone
 
 
 class PPM(nn.ModuleList):
