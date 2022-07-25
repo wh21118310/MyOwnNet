@@ -1,24 +1,66 @@
+# -*- coding: utf-8 -*-
+
 """
- @Time    : 2021/7/6 14:23
- @Author  : Haiyang Mei
- @E-mail  : mhy666@mail.dlut.edu.cn
- 
- @Project : CVPR2021_PFNet
- @File    : PFNet.py
- @Function: Focus and Exploration Network
- 
+    @Time : 2022/7/23 17:22
+    @Author : FaweksLee
+    @Email : 121106010719@njust.edu.cn
+    @File : PFNet_ASPP
+    @Description : Inspired by PFNet & Deeplabv3
 """
+from typing import List
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange
-from torchinfo import summary
-###################################################################
-# ################## Backbone ######################
-###################################################################
-from nets.backbone.Swin_transformer import SwinNet
+
 from nets.backbone.bk import Backbone
-from nets.backbone.convnext import ConvNeXt_Seg
+
+
+###################################################################
+# ################## ASPP Block ###################################
+###################################################################
+class ASPPPooling(nn.Sequential):
+    def __init__(self, in_channels: int, out_channels: int) -> None:
+        super().__init__(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(in_channels, out_channels, 1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        size = x.shape[-2:]
+        for mod in self:
+            x = mod(x)
+        return F.interpolate(x, size=size, mode="bilinear", align_corners=False)
+
+
+class ASPP(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int, atrous_rates: List[int] = [6, 12, 18]) -> None:
+        super(ASPP, self).__init__()
+        modules = list()
+        modules.append(
+            nn.Sequential(nn.Conv2d(in_channels, out_channels, 1, bias=False),
+                          nn.BatchNorm2d(out_channels), nn.ReLU()))
+        rates = tuple(atrous_rates)
+        for rate in rates:
+            modules.append(
+                nn.Sequential(nn.Conv2d(in_channels, out_channels, 3, padding=rate, dilation=rate, bias=False),
+                              nn.BatchNorm2d(out_channels), nn.ReLU(), ))
+        modules.append(ASPPPooling(in_channels, out_channels))
+        self.convs = nn.ModuleList(modules)
+        self.project = nn.Sequential(
+            nn.Conv2d(len(self.convs) * out_channels, out_channels, 1, bias=False),
+            nn.BatchNorm2d(out_channels), nn.ReLU(), nn.Dropout(0.5)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        _res = []
+        for conv in self.convs:
+            _res.append(conv(x))
+        res = torch.cat(_res, dim=1)
+        res = self.project(res)
+        return res
 
 
 ###################################################################
@@ -251,10 +293,15 @@ class PFNet(nn.Module):
 
         if bk in backbone_names1:
             # channel reduction
-            self.cr4 = nn.Sequential(nn.Conv2d(2048, 512, 3, 1, 1), nn.BatchNorm2d(512), nn.ReLU())
-            self.cr3 = nn.Sequential(nn.Conv2d(1024, 256, 3, 1, 1), nn.BatchNorm2d(256), nn.ReLU())
-            self.cr2 = nn.Sequential(nn.Conv2d(512, 128, 3, 1, 1), nn.BatchNorm2d(128), nn.ReLU())
-            self.cr1 = nn.Sequential(nn.Conv2d(256, 64, 3, 1, 1), nn.BatchNorm2d(64), nn.ReLU())
+            self.cr4 = ASPP(2048, 512)
+            self.cr3 = ASPP(1024, 256)
+            self.cr2 = ASPP(512, 128)
+            self.cr1 = ASPP(256, 64)
+
+            # self.cr4 = nn.Sequential(nn.Conv2d(2048, 512, 3, 1, 1), nn.BatchNorm2d(512), nn.ReLU())
+            # self.cr3 = nn.Sequential(nn.Conv2d(1024, 256, 3, 1, 1), nn.BatchNorm2d(256), nn.ReLU())
+            # self.cr2 = nn.Sequential(nn.Conv2d(512, 128, 3, 1, 1), nn.BatchNorm2d(128), nn.ReLU())
+            # self.cr1 = nn.Sequential(nn.Conv2d(256, 64, 3, 1, 1), nn.BatchNorm2d(64), nn.ReLU())
             # positioning
             self.positioning = Positioning(512)
             # focus
@@ -263,10 +310,14 @@ class PFNet(nn.Module):
             self.focus1 = Focus(64, 128)
         elif bk in backbone_names2:
             # channel reduction
-            self.cr4 = nn.Sequential(nn.Conv2d(1024, 256, 3, 1, 1), nn.BatchNorm2d(256), nn.ReLU())
-            self.cr3 = nn.Sequential(nn.Conv2d(512, 128, 3, 1, 1), nn.BatchNorm2d(128), nn.ReLU())
-            self.cr2 = nn.Sequential(nn.Conv2d(256, 64, 3, 1, 1), nn.BatchNorm2d(64), nn.ReLU())
-            self.cr1 = nn.Sequential(nn.Conv2d(128, 32, 3, 1, 1), nn.BatchNorm2d(32), nn.ReLU())
+            self.cr4 = ASPP(1024, 256)
+            self.cr3 = ASPP(512, 128)
+            self.cr2 = ASPP(256, 64)
+            self.cr1 = ASPP(128, 32)
+            # self.cr4 = nn.Sequential(nn.Conv2d(1024, 256, 3, 1, 1), nn.BatchNorm2d(256), nn.ReLU())
+            # self.cr3 = nn.Sequential(nn.Conv2d(512, 128, 3, 1, 1), nn.BatchNorm2d(128), nn.ReLU())
+            # self.cr2 = nn.Sequential(nn.Conv2d(256, 64, 3, 1, 1), nn.BatchNorm2d(64), nn.ReLU())
+            # self.cr1 = nn.Sequential(nn.Conv2d(128, 32, 3, 1, 1), nn.BatchNorm2d(32), nn.ReLU())
             # positioning
             self.positioning = Positioning(256)
             # focus

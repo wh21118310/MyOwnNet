@@ -20,8 +20,10 @@ from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DistributedSampler, DataLoader
 from tqdm import tqdm
 
-from nets.PFNet import PFNet, PFNet_withPVT
+# from nets.PFNet import PFNet, PFNet_withPVT
+from nets.PFNet_ASPP import PFNet
 from nets.SINet import SearchIdentificationNet as SInet
+from nets.backbone.PSPNet import Pspnet
 from nets.backbone.Swin_transformer import SwinNet
 from nets.backbone.convnext import ConvNeXt_Seg
 from utils.arguments import get_scaler, get_opt_and_scheduler, get_criterion, check_path, seed_torch, \
@@ -30,6 +32,7 @@ from utils.data_process import weights_init, MarineFarmData
 from utils.get_metric import binary_accuracy, Acc, FWIoU
 from utils.transform import transforms
 from utils.arguments import structure_loss as criterion
+
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 
@@ -37,9 +40,9 @@ os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 
 '''Loading Model'''
 seed_torch(seed=2022)
-# model_name = 'PFNet_convnext_base_80'
-# model = PFNet(bk="convnext_base")
-# model_name = 'PFNet_swinT_base_80'
+model_name = 'PFNet_convnext_AS_80'
+model = PFNet(bk="convnext_base")
+# model_name = 'PFNet_swinT_AS_80'
 # model = PFNet(bk='swinT_base')
 # model_name = 'SINet_convnext_base_80'
 # model = SInet(bk='convnext_base')
@@ -47,9 +50,12 @@ seed_torch(seed=2022)
 # model = SInet(bk="swinT_base")
 # model_name = 'SINet_res2net50_80'
 # model = SInet(bk='res2net50')
-model_name = 'PFNet_PVT_large_80'
-model = PFNet_withPVT(bk="large", img_size=512)
+# model_name = 'PFNet_PVT_large_80'
+# model = PFNet_withPVT(bk="large", img_size=512)
+# model_name = 'PSPNet_1b'
+# model = Pspnet(num_classes=1)
 gpu_id = "0"
+
 Cuda = True
 distributed = False
 pretrained = True
@@ -69,9 +75,9 @@ if not pretrained:
 model = model.cuda()
 
 '''Loading Datasets'''
-batch_size = 8
+batch_size = 4
 data_dir = r"dataset/MarineFarm_80"
-train_imgs_dir, val_imgs_dir, test_imgs_dir = join(data_dir, "train/images"), join(data_dir, "val/images"),\
+train_imgs_dir, val_imgs_dir, test_imgs_dir = join(data_dir, "train/images"), join(data_dir, "val/images"), \
                                               join(data_dir, "test/images")
 train_labels_dir, val_labels_dir, test_labels_dir = join(data_dir, "train/gt"), join(data_dir, "val/gt"), \
                                                     join(data_dir, "test/gt")

@@ -7,11 +7,11 @@
     @Description : 
 """
 from einops import rearrange
+from torchvision.models.quantization import resnet50
 
 from nets.backbone.Res2Net import res2net50_v1b_26w_4s
 from nets.backbone.Swin_transformer import SwinNet
 from nets.backbone.convnext import ConvNeXt_Seg
-from nets.backbone.resnet import resnet50
 import torch.nn as nn
 
 models_type1 = [
