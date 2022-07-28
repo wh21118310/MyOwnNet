@@ -4,19 +4,16 @@ from torch import nn
 from torch.nn import init
 
 
-
 class SEAttention(nn.Module):
-
-    def __init__(self, channel=512,reduction=16):
+    def __init__(self, channel=512, reduction=16):
         super().__init__()
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)  # Get the 1x1xC
         self.fc = nn.Sequential(
             nn.Linear(channel, channel // reduction, bias=False),
             nn.ReLU(inplace=True),
             nn.Linear(channel // reduction, channel, bias=False),
             nn.Sigmoid()
         )
-
 
     def init_weights(self):
         for m in self.modules():
@@ -40,9 +37,7 @@ class SEAttention(nn.Module):
 
 
 if __name__ == '__main__':
-    input=torch.randn(50,512,7,7)
-    se = SEAttention(channel=512,reduction=8)
-    output=se(input)
+    input = torch.randn(50, 512, 7, 7)
+    se = SEAttention(channel=512, reduction=8)
+    output = se(input)
     print(output.shape)
-
-    

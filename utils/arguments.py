@@ -215,8 +215,7 @@ def get_opt_and_scheduler(model, optimizer_type: str, lr_decay_type: str, moment
     scheduler = {
         'cos': CosineLRScheduler(optimizer, t_initial=100, t_mul=1.0, lr_min=Min_lr,
                                  decay_rate=0.9, warmup_t=0, warmup_lr_init=Init_lr * 0.1, cycle_limit=10),
-        "cosW": CosineAnnealingWarmRestarts(optimizer, T_0=int(Total_epoch / 2), T_mult=1, eta_min=Min_lr,
-                                            last_epoch=-1),
+        "cosW": CosineAnnealingWarmRestarts(optimizer, T_0=int(Total_epoch / 2), T_mult=1, eta_min=Min_lr,last_epoch=-1),
         # lr = 0.05 if epoch < 30; lr= 0.005 if 30 <= epoch < 60; lr = 0.0005 if 60 <= epoch < 90
         'steplr': StepLR(optimizer, step_size=50, gamma=0.9)
     }[lr_decay_type]
@@ -333,40 +332,7 @@ def initial_logger(file):
     return logger
 
 
-class AverageMeter(object):
-    """Computes and stores the average and current value"""
 
-    def __init__(self):
-        self.initialized = False
-        self.val = None
-        self.avg = None
-        self.sum = None
-        self.count = None
-
-    def initialize(self, val, count, weight):
-        self.val = val
-        self.avg = val
-        self.count = count
-        self.sum = val * weight
-        self.initialized = True
-
-    def update(self, val, count=1, weight=1):
-        if not self.initialized:
-            self.initialize(val, count, weight)
-        else:
-            self.add(val, count, weight)
-
-    def add(self, val, count, weight):
-        self.val = val
-        self.count += count
-        self.sum += val * weight
-        self.avg = self.sum / self.count
-
-    def value(self):
-        return self.val
-
-    def average(self):
-        return self.avg
 
 
 def draw(Total_epoch, train_loss_total_epochs, valid_loss_total_epochs, epoch_lr, epoch_iou, logs_path):

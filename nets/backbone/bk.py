@@ -31,8 +31,7 @@ class Backbone(nn.Module):
                 self.backbone = resnet50(pretrain)
             elif self.backbone == 'res2net50':
                 self.backbone = res2net50_v1b_26w_4s(pretrain)
-            self.layer1 = nn.Sequential(self.backbone.conv1, self.backbone.bn1, self.backbone.relu,
-                                        self.backbone.maxpool, self.backbone.layer1)
+            self.layer1 = nn.Sequential(self.backbone.conv1, self.backbone.bn1, self.backbone.relu,self.backbone.maxpool, self.backbone.layer1)
             self.layer2 = self.backbone.layer2
             self.layer3 = self.backbone.layer3
             self.layer4 = self.backbone.layer4
