@@ -4,33 +4,27 @@ from torch import nn
 from torch.nn import init
 
 
-
 class SimplifiedScaledDotProductAttention(nn.Module):
-    '''
+    """
     Scaled dot-product attention
-    '''
+    """
 
-    def __init__(self, d_model, h,dropout=.1):
-        '''
-        :param d_model: Output dimensionality of the model
-        :param d_k: Dimensionality of queries and keys
-        :param d_v: Dimensionality of values
-        :param h: Number of heads
-        '''
+    def __init__(self, d_model, h, dropout=.1):
+        """
+        @param d_model: Output dimensionality of the model
+        @param h: Number of heads
+        """
         super(SimplifiedScaledDotProductAttention, self).__init__()
 
         self.d_model = d_model
-        self.d_k = d_model//h
-        self.d_v = d_model//h
+        self.d_k = d_model // h
+        self.d_v = d_model // h
         self.h = h
 
         self.fc_o = nn.Linear(h * self.d_v, d_model)
-        self.dropout=nn.Dropout(dropout)
-
-
+        self.dropout = nn.Dropout(dropout)
 
         self.init_weights()
-
 
     def init_weights(self):
         for m in self.modules():
@@ -69,7 +63,7 @@ class SimplifiedScaledDotProductAttention(nn.Module):
         if attention_mask is not None:
             att = att.masked_fill(attention_mask, -np.inf)
         att = torch.softmax(att, -1)
-        att=self.dropout(att)
+        att = self.dropout(att)
 
         out = torch.matmul(att, v).permute(0, 2, 1, 3).contiguous().view(b_s, nq, self.h * self.d_v)  # (b_s, nq, h*d_v)
         out = self.fc_o(out)  # (b_s, nq, d_model)
@@ -77,9 +71,7 @@ class SimplifiedScaledDotProductAttention(nn.Module):
 
 
 if __name__ == '__main__':
-    input=torch.randn(50,49,512)
+    input = torch.randn(50, 49, 512)
     ssa = SimplifiedScaledDotProductAttention(d_model=512, h=8)
-    output=ssa(input,input,input)
+    output = ssa(input, input, input)
     print(output.shape)
-
-    
