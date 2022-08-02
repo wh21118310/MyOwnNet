@@ -46,7 +46,7 @@ class ASPP(nn.Module):
         for rate in rates:
             modules.append(
                 nn.Sequential(nn.Conv2d(in_channels, out_channels, 3, padding=rate, dilation=rate, bias=False),
-                              nn.BatchNorm2d(out_channels), nn.ReLU(), ))
+                              nn.BatchNorm2d(out_channels), nn.ReLU()))
         modules.append(ASPPPooling(in_channels, out_channels))
         self.convs = nn.ModuleList(modules)
         self.project = nn.Sequential(
@@ -246,7 +246,7 @@ class Focus(nn.Module):
         self.relu2 = nn.ReLU()
 
     def forward(self, x, y, in_map):
-        # x; current-level features
+        # x: current-level features
         # y: higher-level features
         # in_map: higher-level prediction
 

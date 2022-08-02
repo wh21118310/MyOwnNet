@@ -40,7 +40,7 @@ class InterlacedSparseSelfAttention(nn.Module):
         x = x.reshape(b, c, Q_h, self.P_h, Q_w, self.P_w)
         # Long-range Attention
         x = x.permute(0, 3, 5, 1, 2, 4)
-        x = x.reshape(b * self.P_h * self.P_w, Q_h*Q_w, c)
+        x = x.reshape(b * self.P_h * self.P_w, Q_h * Q_w, c)
         x = self.attention(x, x, x)
         x = x.reshape(b, self.P_h, self.P_w, c, Q_h, Q_w)
 
@@ -51,7 +51,9 @@ class InterlacedSparseSelfAttention(nn.Module):
         x = x.reshape(b, Q_h, Q_w, c, self.P_h, self.P_w)
         x = x.permute(0, 3, 1, 4, 2, 5).reshape(b, c, h, w)
         return x
+
+
 if __name__ == '__main__':
     input = torch.randn(50, 128, 7, 7)
-    danet = InterlacedSparseSelfAttention(P_h=7,P_w=7, num_channels=128)
+    danet = InterlacedSparseSelfAttention(P_h=7, P_w=7, num_channels=128)
     print(danet(input).shape)
