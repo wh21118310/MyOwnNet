@@ -298,10 +298,6 @@ class PFNet(nn.Module):
             self.cr2 = ASPP(512, 128)
             self.cr1 = ASPP(256, 64)
 
-            # self.cr4 = nn.Sequential(nn.Conv2d(2048, 512, 3, 1, 1), nn.BatchNorm2d(512), nn.ReLU())
-            # self.cr3 = nn.Sequential(nn.Conv2d(1024, 256, 3, 1, 1), nn.BatchNorm2d(256), nn.ReLU())
-            # self.cr2 = nn.Sequential(nn.Conv2d(512, 128, 3, 1, 1), nn.BatchNorm2d(128), nn.ReLU())
-            # self.cr1 = nn.Sequential(nn.Conv2d(256, 64, 3, 1, 1), nn.BatchNorm2d(64), nn.ReLU())
             # positioning
             self.positioning = Positioning(512)
             # focus
@@ -314,10 +310,6 @@ class PFNet(nn.Module):
             self.cr3 = ASPP(512, 128)
             self.cr2 = ASPP(256, 64)
             self.cr1 = ASPP(128, 32)
-            # self.cr4 = nn.Sequential(nn.Conv2d(1024, 256, 3, 1, 1), nn.BatchNorm2d(256), nn.ReLU())
-            # self.cr3 = nn.Sequential(nn.Conv2d(512, 128, 3, 1, 1), nn.BatchNorm2d(128), nn.ReLU())
-            # self.cr2 = nn.Sequential(nn.Conv2d(256, 64, 3, 1, 1), nn.BatchNorm2d(64), nn.ReLU())
-            # self.cr1 = nn.Sequential(nn.Conv2d(128, 32, 3, 1, 1), nn.BatchNorm2d(32), nn.ReLU())
             # positioning
             self.positioning = Positioning(256)
             # focus
