@@ -178,24 +178,23 @@ class Context_Exploration_Block(nn.Module):
             nn.Conv2d(self.channels_single, self.channels_single, kernel_size=3, stride=1, padding=8, dilation=8),
             nn.BatchNorm2d(self.channels_single), nn.ReLU())
 
-        self.fusion = nn.Sequential(nn.Conv2d(self.input_channels, self.input_channels, 1, 1, 0),
-                                    nn.BatchNorm2d(self.input_channels), nn.ReLU())
+        self.fusion = nn.Sequential(nn.Conv2d(self.input_channels, self.input_channels, 1, 1, 0), nn.BatchNorm2d(self.input_channels), nn.ReLU())
 
     def forward(self, x):
         p1_input = self.p1_channel_reduction(x)
         p1 = self.p1(p1_input)
         p1_dc = self.p1_dc(p1)
 
-        p2_input = self.p2_channel_reduction(x) + p1_dc
-        p2 = self.p2(p2_input)
+        p2_input = self.p2_channel_reduction(x) + p1
+        p2 = self.p2(p2_input) + p1_dc
         p2_dc = self.p2_dc(p2)
 
-        p3_input = self.p3_channel_reduction(x) + p2_dc
-        p3 = self.p3(p3_input)
+        p3_input = self.p3_channel_reduction(x) + p2
+        p3 = self.p3(p3_input) + p2_dc
         p3_dc = self.p3_dc(p3)
 
-        p4_input = self.p4_channel_reduction(x) + p3_dc
-        p4 = self.p4(p4_input)
+        p4_input = self.p4_channel_reduction(x) + p3
+        p4 = self.p4(p4_input) +p3_dc
         p4_dc = self.p4_dc(p4)
 
         ce = self.fusion(torch.cat((p1_dc, p2_dc, p3_dc, p4_dc), 1))
@@ -353,68 +352,10 @@ class PFNet(nn.Module):
         return torch.sigmoid(predict1)
 
 
-from .backbone.Pyramid_Vision_Transformer import pvt_tiny, pvt_medium, pvt_large
-
-
-class PFNet_withPVT(nn.Module):
-    def __init__(self, bk='large', img_size=224):
-        super(PFNet_withPVT, self).__init__()
-        if bk == 'tiny':
-            self.backbone = pvt_tiny(inchans=3, F4=False, img_size=img_size)
-        elif bk == 'medium':
-            self.backbone = pvt_medium(inchans=3, F4=False, img_size=img_size)
-        elif bk == 'large':
-            self.backbone = pvt_large(inchans=3, F4=False, img_size=img_size)
-        # channel reduction
-        self.cr4 = nn.Sequential(nn.Conv2d(512, 128, 3, 1, 1), nn.BatchNorm2d(128), nn.ReLU())
-        self.cr3 = nn.Sequential(nn.Conv2d(320, 80, 3, 1, 1), nn.BatchNorm2d(80), nn.ReLU())
-        self.cr2 = nn.Sequential(nn.Conv2d(128, 32, 3, 1, 1), nn.BatchNorm2d(32), nn.ReLU())
-        self.cr1 = nn.Sequential(nn.Conv2d(64, 16, 3, 1, 1), nn.BatchNorm2d(16), nn.ReLU())
-        # positioning
-        self.positioning = Positioning(128)
-        # focus
-        self.focus3 = Focus(80, 128)
-        self.focus2 = Focus(32, 80)
-        self.focus1 = Focus(16, 32)
-
-        # for m in self.modules():
-        #     if isinstance(m, nn.ReLU):
-        #         m.inplace = True
-
-    def forward(self, x):
-        out1, out2, out3, out4 = self.backbone(x)
-        # channel reduction
-        cr4 = self.cr4(out4)
-        cr3 = self.cr3(out3)
-        cr2 = self.cr2(out2)
-        cr1 = self.cr1(out1)
-
-        # positioning
-        positioning, predict4 = self.positioning(cr4)
-
-        # focus
-        focus3, predict3 = self.focus3(cr3, positioning, predict4)
-        focus2, predict2 = self.focus2(cr2, focus3, predict3)
-        focus1, predict1 = self.focus1(cr1, focus2, predict2)
-
-        # rescale
-        # predict4 = F.interpolate(predict4, size=x.size()[2:], mode='bilinear', align_corners=True)
-        # predict3 = F.interpolate(predict3, size=x.size()[2:], mode='bilinear', align_corners=True)
-        # predict2 = F.interpolate(predict2, size=x.size()[2:], mode='bilinear', align_corners=True)
-        predict1 = F.interpolate(predict1, size=x.size()[2:], mode='bilinear', align_corners=True)
-
-        if self.training:
-            # return predict4, predict3, predict2, predict1
-            return predict1
-        # return torch.sigmoid(predict4), torch.sigmoid(predict3), torch.sigmoid(predict2), torch.sigmoid(
-        #     predict1)
-        return torch.sigmoid(predict1)
-
-
 if __name__ == '__main__':
     data = torch.rand((4, 3, 512, 512)).cuda()
     # net = PFNet(bk='swinT_base').cuda()
     # net = PFNet()
-    net = PFNet_withPVT(bk='large').cuda()
+    net = PFNet().cuda()
     result = net(data)
     print(result)
