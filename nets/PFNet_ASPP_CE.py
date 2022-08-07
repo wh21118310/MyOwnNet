@@ -135,8 +135,8 @@ class Context_Exploration_Block(nn.Module):
     def __init__(self, input_channels):
         super(Context_Exploration_Block, self).__init__()
         self.input_channels = input_channels
-        self.channels_single = int(input_channels / 4)
-
+        # self.channels_single = int(input_channels / 4)
+        self.channels_single = int(input_channels // 8)
         self.p1_channel_reduction = nn.Sequential(
             nn.Conv2d(self.input_channels, self.channels_single, 1, 1, 0),
             nn.BatchNorm2d(self.channels_single), nn.ReLU())
@@ -147,6 +147,18 @@ class Context_Exploration_Block(nn.Module):
             nn.Conv2d(self.input_channels, self.channels_single, 1, 1, 0),
             nn.BatchNorm2d(self.channels_single), nn.ReLU())
         self.p4_channel_reduction = nn.Sequential(
+            nn.Conv2d(self.input_channels, self.channels_single, 1, 1, 0),
+            nn.BatchNorm2d(self.channels_single), nn.ReLU())
+        self.p5_channel_reduction = nn.Sequential(
+            nn.Conv2d(self.input_channels, self.channels_single, 1, 1, 0),
+            nn.BatchNorm2d(self.channels_single), nn.ReLU())
+        self.p6_channel_reduction = nn.Sequential(
+            nn.Conv2d(self.input_channels, self.channels_single, 1, 1, 0),
+            nn.BatchNorm2d(self.channels_single), nn.ReLU())
+        self.p7_channel_reduction = nn.Sequential(
+            nn.Conv2d(self.input_channels, self.channels_single, 1, 1, 0),
+            nn.BatchNorm2d(self.channels_single), nn.ReLU())
+        self.p8_channel_reduction = nn.Sequential(
             nn.Conv2d(self.input_channels, self.channels_single, 1, 1, 0),
             nn.BatchNorm2d(self.channels_single), nn.ReLU())
 
@@ -178,26 +190,75 @@ class Context_Exploration_Block(nn.Module):
             nn.Conv2d(self.channels_single, self.channels_single, kernel_size=3, stride=1, padding=8, dilation=8),
             nn.BatchNorm2d(self.channels_single), nn.ReLU())
 
-        self.fusion = nn.Sequential(nn.Conv2d(self.input_channels, self.input_channels, 1, 1, 0), nn.BatchNorm2d(self.input_channels), nn.ReLU())
+        # self.p5 = nn.Sequential(
+        #     nn.Conv2d(self.channels_single, self.channels_single, 9, 1, 4),
+        #     nn.BatchNorm2d(self.channels_single), nn.ReLU())
+        # self.p5_dc = nn.Sequential(
+        #     nn.Conv2d(self.channels_single, self.channels_single, kernel_size=3, stride=1, padding=12, dilation=12),
+        #     nn.BatchNorm2d(self.channels_single), nn.ReLU())
+        #
+        # self.p6 = nn.Sequential(
+        #     nn.Conv2d(self.channels_single, self.channels_single, 11, 1, 5),
+        #     nn.BatchNorm2d(self.channels_single), nn.ReLU())
+        # self.p6_dc = nn.Sequential(
+        #     nn.Conv2d(self.channels_single, self.channels_single, kernel_size=3, stride=1, padding=14, dilation=14),
+        #     nn.BatchNorm2d(self.channels_single), nn.ReLU())
+        #
+        # self.p7 = nn.Sequential(
+        #     nn.Conv2d(self.channels_single, self.channels_single, 13, 1, 6),
+        #     nn.BatchNorm2d(self.channels_single), nn.ReLU())
+        # self.p7_dc = nn.Sequential(
+        #     nn.Conv2d(self.channels_single, self.channels_single, kernel_size=3, stride=1, padding=16, dilation=16),
+        #     nn.BatchNorm2d(self.channels_single), nn.ReLU())
+        #
+        # self.p8 = nn.Sequential(
+        #     nn.Conv2d(self.channels_single, self.channels_single, 15, 1, 7),
+        #     nn.BatchNorm2d(self.channels_single), nn.ReLU())
+        # self.p8_dc = nn.Sequential(
+        #     nn.Conv2d(self.channels_single, self.channels_single, kernel_size=3, stride=1, padding=18, dilation=18),
+        #     nn.BatchNorm2d(self.channels_single), nn.ReLU())
+
+        self.fusion = nn.Sequential(
+            nn.Conv2d(self.input_channels, self.input_channels, 1, 1, 0),
+            nn.BatchNorm2d(self.input_channels), nn.ReLU())
 
     def forward(self, x):
         p1_input = self.p1_channel_reduction(x)
         p1 = self.p1(p1_input)
         p1_dc = self.p1_dc(p1)
 
-        p2_input = self.p2_channel_reduction(x) + p1_dc
-        p2 = self.p2(p2_input)
+        p2_input = self.p2_channel_reduction(x) + p1_dc #+p1 CE_80 67.6
+        p2 = self.p2(p2_input) # + p1_dc CE_180 64
         p2_dc = self.p2_dc(p2)
 
         p3_input = self.p3_channel_reduction(x) + p2_dc
-        p3 = self.p3(p3_input)
+        p3 = self.p3(p3_input) #+ p2_dc
         p3_dc = self.p3_dc(p3)
 
-        p4_input = self.p4_channel_reduction(x) + p3_dc
-        p4 = self.p4(p4_input)
+        p4_input = self.p4_channel_reduction(x) +p3_dc
+        p4 = self.p4(p4_input) #+ p3_dc
         p4_dc = self.p4_dc(p4)
 
-        ce = self.fusion(torch.cat((p1_dc, p2_dc, p3_dc, p4_dc), 1))
+        '''
+        Too many branches lead to insufficient feature extraction
+        '''
+        # p5_input = self.p5_channel_reduction(x) + p4_dc
+        # p5 = self.p4(p5_input)  # + p3_dc
+        # p5_dc = self.p5_dc(p5)
+        #
+        # p6_input = self.p6_channel_reduction(x) + p5_dc
+        # p6 = self.p6(p6_input)  # + p3_dc
+        # p6_dc = self.p6_dc(p6)
+        #
+        # p7_input = self.p7_channel_reduction(x) + p6_dc
+        # p7 = self.p7(p7_input)  # + p3_dc
+        # p7_dc = self.p7_dc(p7)
+        #
+        # p8_input = self.p8_channel_reduction(x) + p7_dc
+        # p8 = self.p4(p8_input)  # + p3_dc
+        # p8_dc = self.p8_dc(p8)
+
+        ce = self.fusion(torch.cat((p1_dc, p2_dc, p3_dc, p4_dc, p5_dc, p6_dc, p7_dc, p8_dc), 1))
 
         return ce
 

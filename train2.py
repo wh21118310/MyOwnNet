@@ -20,7 +20,7 @@ from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DistributedSampler, DataLoader
 from tqdm import tqdm
 
-from nets.PFNet_ASPP_CE import PFNet
+from nets.PFNet_ASPP import PFNet
 from nets.SINet import SearchIdentificationNet as SInet
 from nets.backbone.PSPNet import Pspnet
 from nets.backbone.Swin_transformer import SwinNet
@@ -39,10 +39,10 @@ os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 
 '''Loading Model'''
 seed_torch(seed=2022)
-model_name = 'PFNet_convnext_AS_CE_280'
-model = PFNet(bk="convnext_base")
-# model_name = 'PFNet_swinT_AS_80'
-# model = PFNet(bk='swinT_base')
+# model_name = 'PFNet_convnext_AS_CE_80'
+# model = PFNet(bk="convnext_base")
+model_name = 'PFNet_swinT_AS_CE_380'
+model = PFNet(bk='swinT_base')
 # model_name = 'SINet_convnext_base_80'
 # model = SInet(bk='convnext_base')
 # model_name = 'SINet_swinT_base_80'
@@ -53,7 +53,7 @@ model = PFNet(bk="convnext_base")
 # model = PFNet_withPVT(bk="large", img_size=512)
 # model_name = 'PSPNet_1b'
 # model = Pspnet(num_classes=1)
-gpu_id = "0"
+gpu_id = "1"
 
 Cuda = True
 distributed = False
@@ -127,7 +127,7 @@ if model_ema:
 '''Loading Optimizer and Scheduler'''
 optimizer_type = "sgd"
 momentum = 0.9
-lr_decay = 'cosW'
+lr_decay = 'cos'
 optimizer, scheduler = get_opt_and_scheduler(model=model, optimizer_type=optimizer_type, lr_decay_type=lr_decay,
                                              momentum=momentum)
 '''Loading Scaler'''

@@ -214,8 +214,9 @@ def get_opt_and_scheduler(model, optimizer_type: str, lr_decay_type: str, moment
     # ------------------------------------------------------------------#
     scheduler = {
         'cos': CosineLRScheduler(optimizer, t_initial=100, t_mul=1.0, lr_min=Min_lr,
-                                 decay_rate=0.9, warmup_t=0, warmup_lr_init=Init_lr * 0.1, cycle_limit=10),
-        "cosW": CosineAnnealingWarmRestarts(optimizer, T_0=int(Total_epoch / 2), T_mult=1, eta_min=Min_lr,last_epoch=-1),
+                                 decay_rate=0.95, warmup_t=0, warmup_lr_init=Init_lr * 0.5, cycle_limit=10),
+        "cosW": CosineAnnealingWarmRestarts(optimizer, T_0=int(Total_epoch / 3), T_mult=1, eta_min=Min_lr,
+                                            last_epoch=-1),
         # lr = 0.05 if epoch < 30; lr= 0.005 if 30 <= epoch < 60; lr = 0.0005 if 60 <= epoch < 90
         'steplr': StepLR(optimizer, step_size=50, gamma=0.9)
     }[lr_decay_type]
