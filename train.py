@@ -170,6 +170,7 @@ for epoch in range(epoch_start, Total_epoch):
     model.train()
     train_main_loss = AverageMeter()
     train_bar = tqdm(train_loader)
+    # scheduler.step()  # when use stepLR\ExponentialLR
     for batch_idx, (image, label) in enumerate(train_bar, start=1):
         optimizer.zero_grad(set_to_none=True)
         if Cuda:
@@ -201,7 +202,6 @@ for epoch in range(epoch_start, Total_epoch):
         if ema is not None:
             ema.update(model)
         scheduler.step(epoch + batch_idx / trainLoader_size)  # called after every batch update
-        # scheduler.step()  # when use stepLR
         train_main_loss.update(loss.cpu().detach().numpy())
         train_bar.set_description(desc='[train] epoch:{} iter:{}/{} lr:{:.4f} loss:{:.4f}'.format(
             epoch, batch_idx, trainLoader_size, optimizer.param_groups[-1]['lr'], train_main_loss.average()))
