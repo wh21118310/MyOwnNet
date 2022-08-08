@@ -21,8 +21,8 @@ from segmentation_models_pytorch.utils.losses import CrossEntropyLoss
 from timm.loss import SoftTargetCrossEntropy, LabelSmoothingCrossEntropy
 from torch import optim
 from torch.nn import BCELoss, MSELoss, BCEWithLogitsLoss
-from torch.optim.lr_scheduler import StepLR, CosineAnnealingWarmRestarts
-from timm.scheduler import CosineLRScheduler
+from torch.optim.lr_scheduler import StepLR, CosineAnnealingWarmRestarts, ExponentialLR
+from timm.scheduler import CosineLRScheduler, StepLRScheduler
 
 
 # set seeds
@@ -213,12 +213,16 @@ def get_opt_and_scheduler(model, optimizer_type: str, lr_decay_type: str, moment
     #   lr_decay_type   使用到的学习率下降方式，可选的有'step'、'cos'
     # ------------------------------------------------------------------#
     scheduler = {
-        'cos': CosineLRScheduler(optimizer, t_initial=100, t_mul=1.0, lr_min=Min_lr,
-                                 decay_rate=0.95, warmup_t=0, warmup_lr_init=Init_lr * 0.5, cycle_limit=10),
+        'cos': CosineLRScheduler(optimizer, t_initial=100, t_mul=1.0, lr_min=1e-5,
+                                 decay_rate=0.95, warmup_t=10, warmup_lr_init=Init_lr, cycle_limit=10),
         "cosW": CosineAnnealingWarmRestarts(optimizer, T_0=int(Total_epoch / 3), T_mult=1, eta_min=Min_lr,
                                             last_epoch=-1),
-        # lr = 0.05 if epoch < 30; lr= 0.005 if 30 <= epoch < 60; lr = 0.0005 if 60 <= epoch < 90
-        'steplr': StepLR(optimizer, step_size=50, gamma=0.9)
+        #when gamma=0.9, lr = 0.5 if epoch < 30; lr= 0.45 if 30 <= epoch < 60; lr = 0.405 if 60 <= epoch < 90
+        'steplr': StepLRScheduler(optimizer, decay_rate=0.9, decay_t=int(Total_epoch / 3), warmup_t=0,
+                                  warmup_lr_init=Init_lr * 0.5, ),
+        'expo': ExponentialLR(optimizer, gamma=0.9,)
+
+
     }[lr_decay_type]
     return optimizer, scheduler
 

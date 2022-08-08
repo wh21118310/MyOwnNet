@@ -135,8 +135,8 @@ class Context_Exploration_Block(nn.Module):
     def __init__(self, input_channels):
         super(Context_Exploration_Block, self).__init__()
         self.input_channels = input_channels
-        # self.channels_single = int(input_channels / 4)
-        self.channels_single = int(input_channels // 8)
+        self.channels_single = int(input_channels / 4)
+        # self.channels_single = int(input_channels // 8)
         self.p1_channel_reduction = nn.Sequential(
             nn.Conv2d(self.input_channels, self.channels_single, 1, 1, 0),
             nn.BatchNorm2d(self.channels_single), nn.ReLU())

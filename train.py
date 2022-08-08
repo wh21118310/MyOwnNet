@@ -39,7 +39,7 @@ os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 
 '''Loading Model'''
 seed_torch(seed=2022)
-model_name = 'PFNet_convnext_AS_CE_280'
+model_name = 'PFNet_convnext_AS_CE_380'
 model = PFNet(bk="convnext_base")
 # model_name = 'PFNet_swinT_AS_80'
 # model = PFNet(bk='swinT_base')
