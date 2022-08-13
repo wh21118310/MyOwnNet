@@ -82,14 +82,14 @@ class MarineFarmData(Dataset):
         label = cv2.cvtColor(label, cv2.COLOR_RGB2GRAY)
         if self.transform:
             transformed = self.transform(image=img, mask=label)
-            transformed_image = transformed['image']
-            transformed_mask = transformed['mask']
-            return transformed_image, transformed_mask / 255
+            transformed_image = transformed['image'] / 255
+            transformed_mask = transformed['mask'] / 255
+            return transformed_image, transformed_mask
         else:
             trans = transforms.ToTensor()
-            img = trans(img)
-            label = trans(label)
-            return img, label / 255
+            img = trans(img) / 255
+            label = trans(label) / 255
+            return img, label
 
 
 class DataSetWithNosupervised(Dataset):

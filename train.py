@@ -20,7 +20,7 @@ from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DistributedSampler, DataLoader
 from tqdm import tqdm
 
-from nets.PFNet_ASPP_CE import PFNet
+from nets.PFNet_ASPP import PFNet
 from nets.SINet import SearchIdentificationNet as SInet
 from nets.backbone.PSPNet import Pspnet
 from nets.backbone.Swin_transformer import SwinNet
@@ -29,7 +29,7 @@ from utils.arguments import get_scaler, get_opt_and_scheduler, get_criterion, ch
     distributedTraining, model_load, get_mixup, ModelToCuda, initial_logger, AverageMeter, draw
 from utils.data_process import weights_init, MarineFarmData
 from utils.get_metric import binary_accuracy, Acc, FWIoU
-from utils.transform import transforms
+from utils.transform import transforms_train, transforms_valid
 from utils.arguments import structure_loss as criterion
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
@@ -39,9 +39,9 @@ os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 
 '''Loading Model'''
 seed_torch(seed=2022)
-model_name = 'PFNet_convnext_AS_CE_380'
+model_name = 'PFNet_convnext_ASPP_80'
 model = PFNet(bk="convnext_base")
-# model_name = 'PFNet_swinT_AS_80'
+# model_name = 'PFNet_swinT_80'
 # model = PFNet(bk='swinT_base')
 # model_name = 'SINet_convnext_base_80'
 # model = SInet(bk='convnext_base')
@@ -49,8 +49,6 @@ model = PFNet(bk="convnext_base")
 # model = SInet(bk="swinT_base")
 # model_name = 'SINet_res2net50_80'
 # model = SInet(bk='res2net50')
-# model_name = 'PFNet_PVT_large_80'
-# model = PFNet_withPVT(bk="large", img_size=512)
 # model_name = 'PSPNet_1b'
 # model = Pspnet(num_classes=1)
 gpu_id = "0"
@@ -80,9 +78,9 @@ train_imgs_dir, val_imgs_dir, test_imgs_dir = join(data_dir, "train/images"), jo
                                               join(data_dir, "test/images")
 train_labels_dir, val_labels_dir, test_labels_dir = join(data_dir, "train/gt"), join(data_dir, "val/gt"), \
                                                     join(data_dir, "test/gt")
-train_data = MarineFarmData(train_imgs_dir, train_labels_dir, transforms)
-val_data = MarineFarmData(val_imgs_dir, val_labels_dir, transforms)
-test_data = MarineFarmData(test_imgs_dir, test_labels_dir, transforms)
+train_data = MarineFarmData(train_imgs_dir, train_labels_dir, transforms_train)
+val_data = MarineFarmData(val_imgs_dir, val_labels_dir, transforms_valid)
+test_data = MarineFarmData(test_imgs_dir, test_labels_dir, transforms_valid)
 train_data_size, valid_data_size, test_data_size = train_data.__len__(), val_data.__len__(), test_data.__len__()
 if distributed:
     train_sampler = DistributedSampler(train_data, shuffle=True)
@@ -127,7 +125,7 @@ if model_ema:
 '''Loading Optimizer and Scheduler'''
 optimizer_type = "sgd"
 momentum = 0.9
-lr_decay = 'cosW'
+lr_decay = 'cos'
 optimizer, scheduler = get_opt_and_scheduler(model=model, optimizer_type=optimizer_type, lr_decay_type=lr_decay,
                                              momentum=momentum)
 '''Loading Scaler'''
@@ -201,13 +199,13 @@ for epoch in range(epoch_start, Total_epoch):
         optimizer.zero_grad(set_to_none=True)
         if ema is not None:
             ema.update(model)
-        scheduler.step(epoch + batch_idx / trainLoader_size)  # called after every batch update
         train_main_loss.update(loss.cpu().detach().numpy())
         train_bar.set_description(desc='[train] epoch:{} iter:{}/{} lr:{:.4f} loss:{:.4f}'.format(
             epoch, batch_idx, trainLoader_size, optimizer.param_groups[-1]['lr'], train_main_loss.average()))
         if batch_idx == trainLoader_size:
             logger.info('[train] epoch:{} iter:{}/{} lr:{:.4f} loss:{:.4f}'.format(
                 epoch, batch_idx, trainLoader_size, optimizer.param_groups[-1]['lr'], train_main_loss.average()))
+    scheduler.step(epoch)  # called after every batch update
     torch.cuda.empty_cache()
     torch.cuda.synchronize()
     model.eval()

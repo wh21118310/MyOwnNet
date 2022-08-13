@@ -213,9 +213,9 @@ def get_opt_and_scheduler(model, optimizer_type: str, lr_decay_type: str, moment
     #   lr_decay_type   使用到的学习率下降方式，可选的有'step'、'cos'
     # ------------------------------------------------------------------#
     scheduler = {
-        'cos': CosineLRScheduler(optimizer, t_initial=int(Total_epoch / 3), t_mul=1.0, lr_min=1e-5,
-                                 decay_rate=0.9, warmup_t=10, warmup_lr_init=Init_lr, cycle_limit=2),
-        #when gamma=0.9, lr = 0.5 if epoch < 30; lr= 0.45 if 30 <= epoch < 60; lr = 0.405 if 60 <= epoch < 90
+        'cos': CosineLRScheduler(optimizer, t_initial=int(Total_epoch / 3), t_mul=1.0, lr_min=Min_lr,
+                                 decay_rate=0.9, warmup_t=0, warmup_lr_init=Min_lr, cycle_limit=5),
+        # when gamma=0.9, lr = 0.5 if epoch < 30; lr= 0.45 if 30 <= epoch < 60; lr = 0.405 if 60 <= epoch < 90
         'steplr': StepLRScheduler(optimizer, decay_rate=0.9, decay_t=int(Total_epoch / 3), warmup_t=10,
                                   warmup_lr_init=Init_lr),  # use before train and after epoch line ,schuduler.step()
         'plateau': PlateauLRScheduler(optimizer, decay_rate=0.9, patience_t=5, lr_min=Min_lr, threshold=1e-4),
@@ -334,6 +334,7 @@ def initial_logger(file):
     logger.addHandler(stream_handler)
     return logger
 
+
 class AverageMeter(object):
     """Computes and stores the average and current value"""
 
@@ -368,7 +369,6 @@ class AverageMeter(object):
 
     def average(self):
         return self.avg
-
 
 
 def draw(Total_epoch, train_loss_total_epochs, valid_loss_total_epochs, epoch_lr, epoch_iou, logs_path):
