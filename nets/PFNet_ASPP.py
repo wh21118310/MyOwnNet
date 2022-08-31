@@ -283,12 +283,12 @@ backbone_names2 = [  # C: 1024,512,256,128
 
 
 class PFNet(nn.Module):
-    def __init__(self, pretrain=False, bk='resnet50'):
+    def __init__(self, model_path=None, bk='resnet50'):
         super(PFNet, self).__init__()
         # params
         self.model = bk
         # backbone
-        self.backbone = Backbone(bk=bk, pretrain=pretrain)
+        self.backbone = Backbone(bk=bk, model_path=model_path)
 
         if bk in backbone_names1:
             # channel reduction
@@ -339,17 +339,17 @@ class PFNet(nn.Module):
         focus1, predict1 = self.focus1(cr1, focus2, predict2)
 
         # rescale
-        # predict4 = F.interpolate(predict4, size=x.size()[2:], mode='bilinear', align_corners=True)
-        # predict3 = F.interpolate(predict3, size=x.size()[2:], mode='bilinear', align_corners=True)
-        # predict2 = F.interpolate(predict2, size=x.size()[2:], mode='bilinear', align_corners=True)
+        predict4 = F.interpolate(predict4, size=x.size()[2:], mode='bilinear', align_corners=True)
+        predict3 = F.interpolate(predict3, size=x.size()[2:], mode='bilinear', align_corners=True)
+        predict2 = F.interpolate(predict2, size=x.size()[2:], mode='bilinear', align_corners=True)
         predict1 = F.interpolate(predict1, size=x.size()[2:], mode='bilinear', align_corners=True)
 
         if self.training:
-            # return predict4, predict3, predict2, predict1
-            return predict1
-        # return torch.sigmoid(predict4), torch.sigmoid(predict3), torch.sigmoid(predict2), torch.sigmoid(
-        #     predict1)
-        return torch.sigmoid(predict1)
+            return predict4, predict3, predict2, predict1
+            # return predict1
+        return torch.sigmoid(predict4), torch.sigmoid(predict3), torch.sigmoid(predict2), torch.sigmoid(
+            predict1)
+        # return torch.sigmoid(predict1)
 
 
 if __name__ == '__main__':

@@ -11,111 +11,43 @@ import math
 import os
 from functools import partial
 from glob import glob
-from torch.utils.data.dataset import Dataset
+import numpy as np
+from PIL import Image
+from torch.utils.data import Dataset
 import cv2
 import torch
 from torch.utils import model_zoo
-
-# # 载入预训练权重
-# def load_url(url, model_dir='./pretrained', map_location=None):
-#     if not os.path.exists(model_dir):
-#         os.makedirs(model_dir)
-#     filename = url.split('/')[-1]
-#     cached_file = os.path.join(model_dir, filename)
-#     if os.path.exists(cached_file):
-#         return torch.load(cached_file, map_location=map_location)
-#     else:
-#         return model_zoo.load_url(url, model_dir=model_dir)
-#
-#
-# # 网络初始化
-# def weights_init(net, init_type='normal', init_gain=0.02):
-#     def init_func(m):
-#         classname = m.__class__.__name__
-#         if hasattr(m, 'weight') and classname.find('Conv') != -1:
-#             if init_type == 'normal':
-#                 torch.nn.init.normal_(m.weight.data, 0.0, init_gain)
-#             elif init_type == 'xavier':
-#                 torch.nn.init.xavier_normal_(m.weight.data, gain=init_gain)
-#             elif init_type == 'kaiming':
-#                 torch.nn.init.kaiming_normal_(m.weight.data, a=0, mode='fan_in')
-#             elif init_type == 'orthogonal':
-#                 torch.nn.init.orthogonal_(m.weight.data, gain=init_gain)
-#             else:
-#                 raise NotImplementedError('initialization method [%s] is not implemented' % init_type)
-#         elif classname.find('BatchNorm2d') != -1:
-#             torch.nn.init.normal_(m.weight.data, 1.0, 0.02)
-#             torch.nn.init.constant_(m.bias.data, 0.0)
-#
-#     print('initialize network with %s type' % init_type)
-#     net.apply(init_func)
 from torchvision.transforms import transforms
 
 
-class MarineFarmData(Dataset):
-    def __init__(self, imgs_dir, labels_dir, transform=None):
+class ImageFolder(Dataset):
+    def __init__(self, imgs_dir, labels_dir, joint_transform=None, image_transform=None, target_transform=None):
         self.imgs_dir = imgs_dir
         self.labels_dir = labels_dir
-        self.transform = transform
-
+        self.joint_transform = joint_transform
+        self.img_transform = image_transform
+        self.target_transform = target_transform
         self.imgs_path = glob(os.path.join(self.imgs_dir, "*.png"))
         self.labels_path = glob(os.path.join(self.labels_dir, "*.png"))
+        self.ids = [os.path.splitext(file)[0] for file in self.imgs_path if not file.startswith('.')]
         # assert len(self.labels_path) == len(self.imgs_path), "The numbers of labels is not compared to images"
-        self.ids = [os.path.splitext(file)[0] for file in self.imgs_path
-                    if not file.startswith('.')]
-        logging.info(r'Creating dataset with {len(self.ids)} examples')
+        logging.info(r'Creating dataset with {} examples'.format(len(self.ids)))
 
     def __len__(self):
         return len(self.ids)
 
-    def __getitem__(self, idx):
-        # get the idx-th images
-        image_path = self.imgs_path[idx]
-        # get the label correspond to the images
-        label_path = self.labels_path[idx]
-        # read the images and label
-        img = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        label = cv2.imread(label_path, cv2.IMREAD_UNCHANGED)
-        label = cv2.cvtColor(label, cv2.COLOR_BGR2RGB)
-        # if want the result to get the 1d images
-        label = cv2.cvtColor(label, cv2.COLOR_RGB2GRAY)
-        if self.transform:
-            transformed = self.transform(image=img, mask=label)
-            transformed_image = transformed['image'] / 255
-            transformed_mask = transformed['mask'] / 255
-            return transformed_image, transformed_mask
-        else:
-            trans = transforms.ToTensor()
-            img = trans(img) / 255
-            label = trans(label) / 255
-            return img, label
-
-
-class DataSetWithNosupervised(Dataset):
-    def __init__(self, imgs_dir, tfs=None):
-        self.imgs_dir = imgs_dir
-        self.transform = tfs
-        try:
-            self.imgs_path = glob(os.path.join(self.imgs_dir, "*.png"))
-        except Exception:
-            self.imgs_path = glob(os.path.join(self.imgs_dir, "*.jpg"))
-        self.ids = [os.path.splitext(file)[0] for file in os.listdir(imgs_dir)
-                    if not file.startswith('.')]
-        logging.info(f'Creating dataset with {len(self.ids)} examples')
-
-    def __len__(self):
-        return len(self.ids)
-
-    def __getitem__(self, idx):
-        # get the idx-th images
-        image_path = self.imgs_path[idx]
-        # read the images and label
-        image = cv2.imread(image_path)
-        # if want the result to get the 1d images
-        if self.transform is not None:
-            image = self.transform(image=image)
-        return image
+    def __getitem__(self, index):
+        img_path = self.imgs_path[index]
+        img = Image.open(img_path).convert('RGB')
+        gt_path = self.labels_path[index]
+        target = Image.open(gt_path).convert('L')
+        if self.joint_transform is not None:
+            img, target = self.joint_transform(img, target)
+        if self.img_transform is not None:
+            img = self.img_transform(img)
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+        return img, target
 
 
 # 权重初始化
@@ -149,3 +81,4 @@ def load_url(url, model_dir='../logs', map_location=None):
         return torch.load(cached_file, map_location=map_location)
     else:
         return model_zoo.load_url(url, model_dir=model_dir)
+

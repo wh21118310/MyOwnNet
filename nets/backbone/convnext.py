@@ -10,11 +10,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
-from timm.models.layers import trunc_normal_
+from timm.models.layers import trunc_normal_, DropPath
 from torchinfo import summary
-
-from nets.tricks.droppath import DropPath
-
 
 class LayerNorm(nn.Module):
     r""" LayerNorm that supports two data formats: channels_last (default) or channels_first.
@@ -66,7 +63,7 @@ class Block(nn.Module):
         self.gamma = nn.Parameter(layer_scale_init_value * torch.ones(dim),
                                   requires_grad=True) if layer_scale_init_value > 0 else None
         # Regularization
-        self.drop_path = DropPath(drop_prob)
+        self.drop_path = DropPath(drop_prob) if drop_prob >0. else nn.Identity()
         # if drop_prob > 0. else nn.Identity()
 
     def forward(self, x):

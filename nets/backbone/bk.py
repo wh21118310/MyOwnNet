@@ -6,6 +6,7 @@
     @File : bk
     @Description : 
 """
+import torch
 from einops import rearrange
 from torchvision.models.quantization import resnet50
 
@@ -18,25 +19,26 @@ models_type1 = [
     'resnet50', 'res2net50', 'convnext_base',
 ]
 models_type2 = [
-"swinT_base"
+    "swinT_base"
 ]
 
 
 class Backbone(nn.Module):
-    def __init__(self, bk="res2net50", pretrain=False, in_channels=3):
+    def __init__(self, bk="res2net50", model_path=None, in_channels=3):
         super(Backbone, self).__init__()
         self.backbone = bk
         if self.backbone == 'resnet50' or self.backbone == 'res2net50':
             if self.backbone == 'resnet50':
-                self.backbone = resnet50(pretrain)
+                self.backbone = resnet50(pretrained=False)
             elif self.backbone == 'res2net50':
-                self.backbone = res2net50_v1b_26w_4s(pretrain)
-            self.layer1 = nn.Sequential(self.backbone.conv1, self.backbone.bn1, self.backbone.relu,self.backbone.maxpool, self.backbone.layer1)
+                self.backbone = res2net50_v1b_26w_4s(pretrained=False)
+            self.layer1 = nn.Sequential(self.backbone.conv1, self.backbone.bn1, self.backbone.relu,
+                                        self.backbone.maxpool, self.backbone.layer1)
             self.layer2 = self.backbone.layer2
             self.layer3 = self.backbone.layer3
             self.layer4 = self.backbone.layer4
         elif self.backbone == 'convnext_base':
-            self.backbone = ConvNeXt_Seg(in_channels, model_type="base", pretrained=pretrain)
+            self.backbone = ConvNeXt_Seg(in_channels, model_type="base", pretrained=False)
             self.downsample = self.backbone.downsample_layers
             self.stage = self.backbone.stages
             self.layer1 = nn.Sequential(self.downsample[0], self.stage[0], self.backbone.norm0)
@@ -54,6 +56,10 @@ class Backbone(nn.Module):
             self.layer3 = self.layers[1]
             self.layer4_1 = self.layers[2]
             self.layer4_2 = self.layers[3]
+
+        # 是否载入预训练模型
+        if model_path is not None:
+            self.backbone.load_state_dict(torch.load(model_path))
 
     def forward(self, x, model_type="resnet50"):
         if model_type in models_type1:
