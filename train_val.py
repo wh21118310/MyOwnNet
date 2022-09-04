@@ -15,26 +15,28 @@ from torch.nn import DataParallel
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from nets.PFNet_ASPP import PFNet
+from nets.PFNet_ASPP_Mixwise import PFNet
 from utils.arguments import *
 from utils.data_process import weights_init, ImageFolder
 from utils.get_metric import binary_accuracy, Acc, FWIoU
 from utils.loss import IoU, structure_loss
 from utils.transform import joint_transform, img_transform, target_transform
 
-
 '''Config Information'''
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
+os.environ['CUDA_VISIBLE_DEVICES'] = "0, 1"
 cudnn.benchmark = True
 seed_torch(seed=2022)
-device_ids = [1]  # 设定可用的GPU
+device_ids = [0]  # 设定可用的GPU
 
 '''Loading criterion'''
 # criterion_name = "bcew"
 bce_loss = BCEWithLogitsLoss().cuda(device=device_ids[0])
 iou_loss = IoU().cuda(device=device_ids[0])
 struct_Loss = structure_loss().cuda(device=device_ids[0])
+
+
 def bce_iou_loss(pred, target):
     bce_out = bce_loss(pred, target)
     iou_out = iou_loss(pred, target)
@@ -84,7 +86,7 @@ def main(args):
     '''EMA Strategy'''
     ema = get_EMA(useEMA=args['model_ema'], net=model)
     '''Loading Optimizer and Scheduler'''
-    optimizer = get_optimizer(model=model, optimizer_type=args['optimizer'], momentum=args['momentum'])
+    optimizer = get_optimizer(model=model, args=args)
     '''Loading Scaler'''
     scaler = get_scaler(use_amp=args["use_fp16"])
     '''For Epoch & Restart'''
@@ -104,7 +106,8 @@ def main(args):
 
 def train_val(model, optimizer, logger, args, scaler=None, ema=None):
     train_loader_len, val_loader_len = len(args['train_loader']), len(args['val_loader'])
-    train_loss_total_epochs, valid_loss_total_epochs, epoch_lr, epoch_iou = list(), list(), list(), list()
+    train_loss_total_epochs, valid_loss_total_epochs = list(), list()
+    epoch_lr, epoch_iou, epoch_mpa = list(), list(), list()
     '''Train & val'''
     best_iou, best_mpa = .5, .5
     best_epoch, last_index = 0, 0.
@@ -122,6 +125,7 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
                 optimizer.param_groups[0]['lr'] = 2 * base_lr
                 optimizer.param_groups[1]['lr'] = base_lr
             optimizer.zero_grad(set_to_none=True)
+            batch_size = image.size(0)
             image = image.to(device=device_ids[0], dtype=torch.float32, non_blocking=True)
             label = label.to(device=device_ids[0], dtype=torch.float32, non_blocking=True)
             if scaler is None:
@@ -150,7 +154,7 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
                 ema.update(model)
             optimizer.zero_grad(set_to_none=True)
 
-            train_main_loss.update(loss.cpu().detach().numpy())
+            train_main_loss.update(loss.cpu().detach().numpy(), num=batch_size)
             train_bar.set_description(desc='[train] epoch:{} iter:{}/{} lr:{:.4f} loss:{:.4f}'.format(
                 epoch, batch_idx, train_loader_len, optimizer.param_groups[-1]['lr'],
                 train_main_loss.average()))
@@ -172,6 +176,7 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
         mpa_meter = AverageMeter()
         with torch.no_grad():
             for batch_idx, (image, label) in enumerate(val_bar, start=1):
+                batch_size = image.size(0)
                 image = image.to(device=device_ids[0], dtype=torch.float32, non_blocking=True)
                 label = label.to(device=device_ids[0], dtype=torch.float32, non_blocking=True)
                 predict_1, predict_2, predict_3, predict_4 = model(image)
@@ -180,7 +185,7 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
                 loss_3 = struct_Loss(predict_3, label)
                 loss_4 = struct_Loss(predict_4, label)
                 loss = 1 * loss_1 + 1 * loss_2 + 2 * loss_3 + 4 * loss_4
-                val_loss.update(loss.cpu().detach().numpy())
+                val_loss.update(loss.cpu().detach().numpy(), num=batch_size)
                 val_bar.set_description(desc='[val] epoch:{} iter:{}/{} loss:{:.4f}'.format(
                     epoch, batch_idx, val_loader_len, val_loss.average()))
                 if batch_idx == val_loader_len:
@@ -193,11 +198,11 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
                     acc, valid_sum = binary_accuracy(outputs, target)
                     mpa = Acc(outputs.squeeze(), target.cpu().squeeze(), ignore_zero=False)
                     fwiou = FWIoU(outputs.squeeze(), target.cpu().squeeze(), ignore_zero=False)
-                    acc_meter.update(acc)
-                    mpa_meter.update(mpa)
-                    fwIoU_meter.update(fwiou)
+                    acc_meter.update(acc, num=batch_size)
+                    mpa_meter.update(mpa, num=batch_size)
+                    fwIoU_meter.update(fwiou, num=batch_size)
         # save loss & lr
-        train_loss_total_epochs.append(train_main_loss.avg)
+        train_loss_total_epochs.append(train_main_loss.average())
         valid_loss_total_epochs.append(val_loss.average())
         epoch_lr.append(optimizer.param_groups[-1]['lr'])
         curr_iter += 1
@@ -216,7 +221,9 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
             best_iou = fwIoU_meter.average()
             best_epoch = epoch
             args['best_ckpt'] = best_ckpt
-            logger.info('[save] Best Model saved at epoch:{}, fwIou:{}'.format(best_epoch, fwIoU_meter.average()))
+            logger.info('[save] Best Model saved at epoch:{}, fwIou:{}, mPA:{}'.format(best_epoch, fwIoU_meter.average(
+
+            ), mpa_meter.average()))
 
             if exists(filename):
                 os.remove(filename)
@@ -237,34 +244,40 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
         if mpa_meter.average() > best_mpa:
             best_mpa = mpa_meter.average()
         epoch_iou.append(fwIoU_meter.average())
+        epoch_mpa.append(mpa_meter.average())
         # 显示loss
-        print("best_epoch:{}, nowIoU: {:.4f}, bestIoU:{:.4f}, now_mPA:{:.4f}, best_mPA:{:.4f}\n"
-              .format(best_epoch, fwIoU_meter.average() * 100, best_iou * 100, mpa_meter.average() * 100,
-                      best_mpa * 100))
-
+        logger.info("best_epoch:{}, nowIoU: {:.4f}, bestIoU:{:.4f}, now_mPA:{:.4f}, best_mPA:{:.4f}\n"
+                    .format(best_epoch, fwIoU_meter.average() * 100, best_iou * 100, mpa_meter.average() * 100,
+                            best_mpa * 100))
+    indexSet = dict(
+        learningRate=epoch_lr,
+        FwIoU=epoch_iou,
+        mPA=epoch_mpa
+    )
     if args['plot']:
-        draw(args['epoch_num'], train_loss_total_epochs, valid_loss_total_epochs, epoch_lr, epoch_iou, args['log_dir'])
+        draw(args['epoch_num'], train_loss_total_epochs, valid_loss_total_epochs, indexSet, args['log_dir'])
 
 
 if __name__ == '__main__':
     args = dict(
-        model_name='PFNet_resnet50_new_ASPP',
+        model_name='PFNet_resnet50_ParamMixWise',
         backbone='resnet50',
         backbone_path="./params/resnet/resnet50.pth",
         model_init=True,  # if backbone_path is None, Set False Please.
 
-        epoch_num=100,
+        epoch_num=500,
         training_batch_size=8,  # 以8为基数效果更佳
         data_dir=r"dataset/MarineFarm_80",
 
         epoch_start=0,
+        optimizer='sgd',  # choice: sgd, adam
         lr=1e-3,
         lr_decay=0.9,
         weight_decay=5e-4,
         momentum=0.9,
         # snapshot='',
         poly_train=True,  # if True, use Poly strategy
-        optimizer='sgd',  # choice: sgd, adam
+
         save_inter=10,  # 用来存模型
         Resume=False,  # used for discriminate the status from the breakpoint or start
         model_ema=False,  # if True, use Model Exponential Moving Average

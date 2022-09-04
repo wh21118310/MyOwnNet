@@ -105,10 +105,16 @@ def check_UpOrLower(varName: str):
         return varName
 
 
-def get_optimizer(model, optimizer_type: str, momentum: float = 0.9):
+def get_optimizer(model, args):
+    optimizer_type = args['optimizer']
     optimizer_type = check_UpOrLower(optimizer_type)
     weight_decay = {"sgd": 1e-4, "adam": 0}[optimizer_type]
+    weight_decay = weight_decay if weight_decay > args['weight_decay'] else args['weight_decay']
     Init_lr = {"sgd": 7e-3, "adam": 5e-4}[optimizer_type]  # Set as recommand
+    Init_lr = Init_lr if Init_lr > args['lr'] else args['lr']
+    momentum = 0.9
+    if args['momentum'] is not None:
+        momentum = args['momentum']
     # Min_lr = max_lr *0.01
     optimizer = {
         'adam': optim.Adam([
@@ -288,13 +294,13 @@ def _sigmoid(x):
     return 1 / (1 + np.exp(-x))
 
 
-def draw(Total_epoch, train_loss_total_epochs, valid_loss_total_epochs, epoch_lr, epoch_iou, logs_path):
+def draw(Total_epoch, train_loss_total_epochs, valid_loss_total_epochs, epoch_indexSet, logs_path):
     import matplotlib
     matplotlib.use("TkAgg")
     from matplotlib import pyplot as plt
     from utils.get_metric import smooth
     x = [i for i in range(Total_epoch)]
-    fig = plt.figure(figsize=(12, 4))
+    fig = plt.figure(figsize=(24, 8))
     ax = fig.add_subplot(2, 2, 1)
     ax.plot(x, smooth(train_loss_total_epochs, 0.6), label='train loss')
     ax.plot(x, smooth(valid_loss_total_epochs, 0.6), label='val loss')
@@ -304,6 +310,7 @@ def draw(Total_epoch, train_loss_total_epochs, valid_loss_total_epochs, epoch_lr
     ax.grid(True)
     plt.legend(loc='upper right', fontsize=15)
 
+    epoch_lr = epoch_indexSet['learningRate']
     ax = fig.add_subplot(2, 2, 2)
     ax.plot(x, epoch_lr, label='Learning Rate')
     ax.set_xlabel('Epoch', fontsize=15)
@@ -312,6 +319,7 @@ def draw(Total_epoch, train_loss_total_epochs, valid_loss_total_epochs, epoch_lr
     ax.grid(True)
     plt.legend(loc='upper right', fontsize=15)
 
+    epoch_iou = epoch_indexSet['FwIoU']
     ax = fig.add_subplot(2, 2, 3)
     ax.plot(x, epoch_iou, label="FwIoU")
     ax.set_xlabel("Epoch", fontsize=15)
@@ -319,7 +327,17 @@ def draw(Total_epoch, train_loss_total_epochs, valid_loss_total_epochs, epoch_lr
     ax.set_title("FwIoU index", fontsize=15)
     ax.grid(True)
     plt.legend(loc='upper right', fontsize=15)
+
+    epoch_mpa = epoch_indexSet['mPA']
+    ax = fig.add_subplot(2, 2, 4)
+    ax.plot(x, epoch_mpa, label="mPA")
+    ax.set_xlabel("Epoch", fontsize=15)
+    ax.set_ylabel("meanPA", fontsize=15)
+    ax.set_title("meanPA index", fontsize=15)
+    ax.grid(True)
+    plt.legend(loc='upper right', fontsize=15)
     plt.tight_layout()
     plt.savefig(logs_path + "./train_val.png")
     print("save plot in ", logs_path)
+
 

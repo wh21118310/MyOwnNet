@@ -4,11 +4,9 @@
     @Time : 2022/7/23 17:22
     @Author : FaweksLee
     @Email : 121106010719@njust.edu.cn
-    @File : PFNet_ASPP
+    @File : PFNet_ASPP_Depthwise
     @Description : Inspired by PFNet & Deeplabv3
 """
-from typing import List
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -17,50 +15,74 @@ from nets.backbone.bk import Backbone
 
 
 ###################################################################
-# ################## ASPP Block ###################################
+# ################## TEM Block ###################################
 ###################################################################
-class ASPPPooling(nn.Sequential):
+class BasicConv2d(nn.Module):
+    def __init__(self, in_planes, out_planes, kernel_size, stride=1, padding=0, dilation=1, groups=1):
+        super(BasicConv2d, self).__init__()
+        self.conv = nn.Conv2d(in_planes, out_planes, kernel_size=kernel_size, stride=stride, padding=padding,
+                              dilation=dilation, bias=False, groups=groups)
+        self.bn = nn.BatchNorm2d(out_planes)
+
+    def forward(self, x):
+        x = self.conv(x)
+        x = self.bn(x)
+        return x
+
+
+class PaddleWise(nn.Module):
+    def __init__(self, channels, kernel_size, padding):
+        super().__init__()
+        self.channelSep = nn.Sequential(
+            BasicConv2d(channels, channels, kernel_size=(1, kernel_size), padding=(0, padding)),
+            BasicConv2d(channels, channels, kernel_size=(kernel_size, 1), padding=(padding, 0))
+        )
+        self.DepthSep = nn.Sequential(
+            BasicConv2d(channels, channels, kernel_size=kernel_size, groups=channels, padding=padding),
+            BasicConv2d(channels, channels, kernel_size=1)
+        )
+        self.alpha = nn.Parameter(torch.ones(1))
+        self.beta = nn.Parameter(torch.ones(1))
+
+    def forward(self, x):
+        channel_data = self.channelSep(x)
+        Depth_data = self.DepthSep(x)
+        return self.alpha * channel_data+self.beta * Depth_data
+
+class TextureEnhancedModule(nn.Module):
     def __init__(self, in_channels: int, out_channels: int) -> None:
-        super().__init__(
-            nn.AdaptiveAvgPool2d(1),
-            nn.Conv2d(in_channels, out_channels, 1, bias=False),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(),
+        super(TextureEnhancedModule, self).__init__()
+        self.relu = nn.ReLU(inplace=True)
+        # self.tem_channels = in_channels // 4  # 原版未使用此形式，而是输出通道为out_channels
+        self.branch0 = nn.Sequential(
+            BasicConv2d(in_channels, out_channels, 1)
         )
+        self.branch1 = nn.Sequential(
+            BasicConv2d(in_channels, out_channels, 1),
+            PaddleWise(out_channels, kernel_size=3, padding=1),
+            BasicConv2d(out_channels, out_channels, kernel_size=3, padding=3, dilation=3)
+        )
+        self.branch2 = nn.Sequential(
+            BasicConv2d(in_channels, out_channels, 1),
+            PaddleWise(channels=out_channels, kernel_size=5, padding=2),
+            BasicConv2d(out_channels, out_channels, kernel_size=3, padding=5, dilation=5)
+        )
+        self.branch3 = nn.Sequential(
+            BasicConv2d(in_channels, out_channels, 1),
+            PaddleWise(out_channels, kernel_size=7, padding=3),
+            BasicConv2d(out_channels, out_channels, kernel_size=3, padding=7, dilation=7)
+        )
+        self.conv_cat = BasicConv2d(4 * out_channels, out_channels, 3, padding=1)
+        self.conv_res = BasicConv2d(in_channels, out_channels, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        size = x.shape[-2:]
-        for mod in self:
-            x = mod(x)
-        return F.interpolate(x, size=size, mode="bilinear", align_corners=False)
-
-
-class ASPP(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, atrous_rates: List[int] = [6, 12, 18]) -> None:
-        super(ASPP, self).__init__()
-        modules = list()
-        modules.append(
-            nn.Sequential(nn.Conv2d(in_channels, out_channels, 1, bias=False),
-                          nn.BatchNorm2d(out_channels), nn.ReLU()))
-        rates = tuple(atrous_rates)
-        for rate in rates:
-            modules.append(
-                nn.Sequential(nn.Conv2d(in_channels, out_channels, 3, padding=rate, dilation=rate, bias=False),
-                              nn.BatchNorm2d(out_channels), nn.ReLU()))
-        modules.append(ASPPPooling(in_channels, out_channels))
-        self.convs = nn.ModuleList(modules)
-        self.project = nn.Sequential(
-            nn.Conv2d(len(self.convs) * out_channels, out_channels, 1, bias=False),
-            nn.BatchNorm2d(out_channels), nn.ReLU(), nn.Dropout(0.5)
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        _res = []
-        for conv in self.convs:
-            _res.append(conv(x))
-        res = torch.cat(_res, dim=1)
-        res = self.project(res)
-        return res
+        x0 = self.branch0(x)
+        x1 = self.branch1(x)
+        x2 = self.branch2(x)
+        x3 = self.branch3(x)
+        x_cat = self.conv_cat(torch.cat((x0, x1, x2, x3), 1))
+        x = self.relu(x_cat + self.conv_res(x))
+        return x
 
 
 ###################################################################
@@ -178,7 +200,8 @@ class Context_Exploration_Block(nn.Module):
             nn.Conv2d(self.channels_single, self.channels_single, kernel_size=3, stride=1, padding=8, dilation=8),
             nn.BatchNorm2d(self.channels_single), nn.ReLU())
 
-        self.fusion = nn.Sequential(nn.Conv2d(self.input_channels, self.input_channels, 1, 1, 0), nn.BatchNorm2d(self.input_channels), nn.ReLU())
+        self.fusion = nn.Sequential(nn.Conv2d(self.input_channels, self.input_channels, 1, 1, 0),
+                                    nn.BatchNorm2d(self.input_channels), nn.ReLU())
 
     def forward(self, x):
         p1_input = self.p1_channel_reduction(x)
@@ -292,10 +315,10 @@ class PFNet(nn.Module):
 
         if bk in backbone_names1:
             # channel reduction
-            self.cr4 = ASPP(2048, 512)
-            self.cr3 = ASPP(1024, 256)
-            self.cr2 = ASPP(512, 128)
-            self.cr1 = ASPP(256, 64)
+            self.cr4 = TextureEnhancedModule(2048, 512)
+            self.cr3 = TextureEnhancedModule(1024, 256)
+            self.cr2 = TextureEnhancedModule(512, 128)
+            self.cr1 = TextureEnhancedModule(256, 64)
 
             # positioning
             self.positioning = Positioning(512)
@@ -305,10 +328,10 @@ class PFNet(nn.Module):
             self.focus1 = Focus(64, 128)
         elif bk in backbone_names2:
             # channel reduction
-            self.cr4 = ASPP(1024, 256)
-            self.cr3 = ASPP(512, 128)
-            self.cr2 = ASPP(256, 64)
-            self.cr1 = ASPP(128, 32)
+            self.cr4 = TextureEnhancedModule(1024, 256)
+            self.cr3 = TextureEnhancedModule(512, 128)
+            self.cr2 = TextureEnhancedModule(256, 64)
+            self.cr1 = TextureEnhancedModule(128, 32)
             # positioning
             self.positioning = Positioning(256)
             # focus

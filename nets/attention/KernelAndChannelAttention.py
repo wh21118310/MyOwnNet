@@ -15,7 +15,6 @@ import torch
 from torchvision import models
 from torch.nn import Module, Parameter, Softmax, Conv2d
 from torch import nn
-from functools import partial
 
 
 def Conv3x3_pad_relu(in_planes, out_planes, kernel_size=None, stride=None, padding=None):
@@ -43,13 +42,12 @@ class KernelAttentionModule(Module):
     def __init__(self, in_planes, scale=8, eps=1e-6):
         super(KernelAttentionModule, self).__init__()
         self.gamma = Parameter(torch.zeros(1))
-        self.scale = scale
         self.in_channels = in_planes
         self.softplus = F.softplus
         self.eps = eps
 
-        self.query = Conv2d(in_channels=self.in_channels, out_channels=self.in_channels // self.scale, kernel_size=1)
-        self.key = Conv2d(in_channels=self.in_channels, out_channels=self.in_channels // self.scale, kernel_size=1)
+        self.query = Conv2d(in_channels=self.in_channels, out_channels=self.in_channels // scale, kernel_size=1)
+        self.key = Conv2d(in_channels=self.in_channels, out_channels=self.in_channels // scale, kernel_size=1)
         self.value = Conv2d(in_channels=self.in_channels, out_channels=self.in_channels, kernel_size=1)
 
     def forward(self, x):
