@@ -4,13 +4,14 @@
     @Time : 2022/7/23 17:22
     @Author : FaweksLee
     @Email : 121106010719@njust.edu.cn
-    @File : PFNet_ASPP_Depthwise
+    @File : PFNet_ASPP_Mixwise_KAM
     @Description : Inspired by PFNet & Deeplabv3
 """
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from nets.attention.KernelAndChannelAttention import KernelAttentionModule as KA_block
 from nets.backbone.bk import Backbone
 
 
@@ -226,15 +227,16 @@ class Positioning(nn.Module):
         super(Positioning, self).__init__()
         self.channel = channel
         self.cab = CA_Block(self.channel)
-        self.sab = SA_Block(self.channel)
+        # self.sab = SA_Block(self.channel)
+        self.kab = KA_block(self.channel)
         self.map = nn.Conv2d(self.channel, 1, 7, 1, 3)
 
     def forward(self, x):
         cab = self.cab(x)
-        sab = self.sab(cab)
-        map = self.map(sab)
+        kab = self.kab(cab)
+        map = self.map(kab)
 
-        return sab, map
+        return kab, map
 
 
 ###################################################################
@@ -353,13 +355,12 @@ class PFNet(nn.Module):
         focus3, predict3 = self.focus3(cr3, positioning, predict4)
         focus2, predict2 = self.focus2(cr2, focus3, predict3)
         focus1, predict1 = self.focus1(cr1, focus2, predict2)
-
+        predict4 = F.interpolate(predict4, size=x.size()[2:], mode='bilinear', align_corners=True)
+        predict3 = F.interpolate(predict3, size=x.size()[2:], mode='bilinear', align_corners=True)
+        predict2 = F.interpolate(predict2, size=x.size()[2:], mode='bilinear', align_corners=True)
+        predict1 = F.interpolate(predict1, size=x.size()[2:], mode='bilinear', align_corners=True)
         if self.training:
             # rescale
-            predict4 = F.interpolate(predict4, size=x.size()[2:], mode='bilinear', align_corners=True)
-            predict3 = F.interpolate(predict3, size=x.size()[2:], mode='bilinear', align_corners=True)
-            predict2 = F.interpolate(predict2, size=x.size()[2:], mode='bilinear', align_corners=True)
-            predict1 = F.interpolate(predict1, size=x.size()[2:], mode='bilinear', align_corners=True)
             return predict4, predict3, predict2, predict1
         return torch.sigmoid(predict4), torch.sigmoid(predict3), torch.sigmoid(predict2), torch.sigmoid(
             predict1)

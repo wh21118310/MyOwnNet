@@ -18,7 +18,7 @@ from torch.autograd import Variable
 from torch.backends import cudnn
 from torchvision.transforms import transforms
 
-from nets.PFNet_ASPP import PFNet
+from nets.PFNet_ASPP_Mixwise import PFNet
 from utils.arguments import seed_torch, check_path
 
 seed_torch(seed=2022)
@@ -60,8 +60,8 @@ def main(args):
             w, h = img.size
             img_var = Variable(img_transform(img).unsqueeze(0)).cuda(device_ids[0])
             _, _, _, prediction = model(img_var)
-
-            prediction = np.array(transforms.Resize((h, w))(to_pil(prediction.data.squeeze(0).cpu())))
+            # prediction = np.array(transforms.Resize((h, w))(to_pil(prediction.data.squeeze(0).cpu())))
+            prediction = np.array(to_pil(prediction.data.squeeze(0).cpu()))
             if args['save_results']:
                 Image.fromarray(prediction).convert("L").save(os.path.join(args['result_path'], idx+".png"))
                 print("save Image :", idx)
@@ -69,7 +69,7 @@ def main(args):
 
 if __name__ == '__main__':
     args = dict(
-        model_name='PFNet_resnet50_new_ASPP',
+        model_name='PFNet_resnet50_MixWise',
         backbone_path='./params/resnet/resnet50.pth',
         backbone_name='resnet50',
         data_dir=r"dataset/MarineFarm_80/test/images",

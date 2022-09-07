@@ -9,13 +9,12 @@
 from os.path import exists
 
 from timm.utils import get_state_dict
-from torch.backends import cudnn
 from torch.cuda.amp import autocast
 from torch.nn import DataParallel
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from nets.PFNet_ASPP_Mixwise_KAM import PFNet
+from nets.attention.KernelAndChannelAttention import MultiAttentionNet as MAN
 from utils.arguments import *
 from utils.data_process import weights_init, ImageFolder
 from utils.get_metric import binary_accuracy, Acc, FWIoU
@@ -25,8 +24,7 @@ from utils.transform import joint_transform, img_transform, target_transform
 '''Config Information'''
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
-os.environ['CUDA_VISIBLE_DEVICES'] = "0, 1"
-cudnn.benchmark = True
+os.environ['CUDA_VISIBLE_DEVICES'] = "1"
 seed_torch(seed=2022)
 device_ids = [0]  # 设定可用的GPU
 
@@ -56,7 +54,7 @@ def main(args):
     logger = initial_logger(log_name)  # log file
 
     '''Model Settings'''
-    model = PFNet(bk=args['backbone'], model_path=args['backbone_path'])
+    model = MAN(in_channels=3, num_classes=1)
     if not args['model_init']:
         weights_init(model)
     model = model.cuda(device=device_ids[0])
@@ -109,7 +107,7 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
     train_loss_total_epochs, valid_loss_total_epochs = list(), list()
     epoch_lr, epoch_iou, epoch_mpa = list(), list(), list()
     '''Train & val'''
-    best_iou, best_mpa = .5, .5
+    best_iou, best_mpa = .1, .1
     best_epoch, last_index = 0, 0.
     filename = ""
     curr_iter = 0
@@ -129,22 +127,14 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
             image = image.to(device=device_ids[0], dtype=torch.float32, non_blocking=True)
             label = label.to(device=device_ids[0], dtype=torch.float32, non_blocking=True)
             if scaler is None:
-                predict_1, predict_2, predict_3, outputs = model(image)
-                loss_1 = bce_iou_loss(predict_1, label)
-                loss_2 = struct_Loss(predict_2, label)
-                loss_3 = struct_Loss(predict_3, label)
-                loss_4 = struct_Loss(outputs, label)
-                loss = 1 * loss_1 + 1 * loss_2 + 2 * loss_3 + 4 * loss_4
+                outputs = model(image)
+                loss = struct_Loss(outputs, label)
                 loss.backward()
                 optimizer.step()
             else:
                 with autocast():
-                    predict_1, predict_2, predict_3, outputs = model(image)
-                    loss_1 = bce_iou_loss(predict_1, label)
-                    loss_2 = struct_Loss(predict_2, label)
-                    loss_3 = struct_Loss(predict_3, label)
-                    loss_4 = struct_Loss(outputs, label)
-                    loss = 1 * loss_1 + 1 * loss_2 + 2 * loss_3 + 4 * loss_4
+                    outputs = model(image)
+                    loss = struct_Loss(outputs, label)
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
                 scaler.update()
@@ -179,12 +169,8 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
                 batch_size = image.size(0)
                 image = image.to(device=device_ids[0], dtype=torch.float32, non_blocking=True)
                 label = label.to(device=device_ids[0], dtype=torch.float32, non_blocking=True)
-                predict_1, predict_2, predict_3, predict_4 = model(image)
-                loss_1 = bce_iou_loss(predict_1, label)
-                loss_2 = struct_Loss(predict_2, label)
-                loss_3 = struct_Loss(predict_3, label)
-                loss_4 = struct_Loss(predict_4, label)
-                loss = 1 * loss_1 + 1 * loss_2 + 2 * loss_3 + 4 * loss_4
+                predict = model(image)
+                loss = struct_Loss(predict, label)
                 val_loss.update(loss.cpu().detach().numpy(), num=batch_size)
                 val_bar.set_description(desc='[val] epoch:{} iter:{}/{} loss:{:.4f}'.format(
                     epoch, batch_idx, val_loader_len, val_loss.average()))
@@ -193,11 +179,11 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
                         epoch, batch_idx, val_loader_len, val_loss.average()))
                 '''以下部分由于数据集的图片是二分类图像，故采用以下方式处理'''
                 # outputs = torch.where(outputs > 0.5, torch.ones_like(outputs), torch.zeros_like(outputs))
-                outputs = predict_4.cpu().detach().numpy()
+                outputs = predict.cpu().detach().numpy()
                 for (outputs, target) in zip(outputs, label):
                     acc, valid_sum = binary_accuracy(outputs, target)
-                    mpa = Acc(outputs.squeeze(), target.cpu().squeeze(), ignore_zero=False)
-                    fwiou = FWIoU(outputs.squeeze(), target.cpu().squeeze(), ignore_zero=False)
+                    mpa = Acc(outputs.squeeze(), target.cpu().squeeze(), ignore_zero=False, num_classes=2)
+                    fwiou = FWIoU(outputs.squeeze(), target.cpu().squeeze(), ignore_zero=False, num_classes=2)
                     acc_meter.update(acc, num=batch_size)
                     mpa_meter.update(mpa, num=batch_size)
                     fwIoU_meter.update(fwiou, num=batch_size)
@@ -222,7 +208,6 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
             best_epoch = epoch
             args['best_ckpt'] = best_ckpt
             logger.info('[save] Best Model saved at epoch:{}, fwIou:{}, mPA:{}'.format(best_epoch, fwIoU_meter.average(
-
             ), mpa_meter.average()))
 
             if exists(filename):
@@ -260,9 +245,9 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
 
 if __name__ == '__main__':
     args = dict(
-        model_name='PFNet_resnet50_MixWise_KAM',
-        backbone='resnet50',
-        backbone_path="./params/resnet/resnet50.pth",
+        model_name='MultiAttentionNet',
+        # backbone='resnet50',
+        # backbone_path="./params/resnet/resnet50.pth",
         model_init=True,  # if backbone_path is None, Set False Please.
 
         epoch_num=500,

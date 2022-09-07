@@ -89,7 +89,7 @@ class ChannelAttentionModule(nn.Module):
         proj_value = x.view(b, c, -1)
         out = torch.bmm(attention, proj_value)
         out = out.view(b, c, h, w)
-        out = self.gamma * out
+        out = self.gamma * out + x
         return out
 
 
@@ -157,10 +157,9 @@ class MultiAttentionNet(Module):
 
         self.finalConv = nn.Sequential(
             nn.ConvTranspose2d(self.channels[0], 32, 4, 2, 1),
-            nn.ReLU(inplace=True),
             nn.Conv2d(32, 32, 3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(32, num_classes, 3, padding=1)
+            nn.Conv2d(32, num_classes, 3, padding=1),
+            nn.ReLU(inplace=True)
         )
 
     def forward(self, x):

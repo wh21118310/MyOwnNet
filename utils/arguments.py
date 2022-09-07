@@ -19,6 +19,7 @@ from segmentation_models_pytorch.utils.losses import CrossEntropyLoss
 from timm.loss import SoftTargetCrossEntropy, LabelSmoothingCrossEntropy
 from timm.scheduler.scheduler import Scheduler
 from torch import optim
+from torch.backends import cudnn
 from torch.nn import BCELoss, MSELoss, BCEWithLogitsLoss
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ExponentialLR
 from timm.scheduler import CosineLRScheduler, StepLRScheduler, PlateauLRScheduler
@@ -33,7 +34,8 @@ def seed_torch(seed=2021):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    # torch.backends.deterministic = True
+    cudnn.benchmark = True
+    cudnn.deterministic = True
 
 
 def tensor2img(tensor):
