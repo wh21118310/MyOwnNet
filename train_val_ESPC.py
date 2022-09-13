@@ -9,17 +9,16 @@
 from os.path import exists
 
 from timm.utils import get_state_dict
+from torch.backends import cudnn
 from torch.cuda.amp import autocast
 from torch.nn import DataParallel
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-# from nets.PFNet_ASPP_Mixwise_KAM import PFNet
-# from nets.PFNet import PFNet
-from nets.PFNet_ASPP_Mixwise import PFNet
+from nets.PFNet_ASPPMixwise_TailESPCN import PFNet
 from utils.arguments import *
 from utils.data_process import weights_init, ImageFolder
-from utils.get_metric import Acc, FWIoU, OverallAccuracy
+from utils.get_metric import binary_accuracy, Acc, FWIoU
 from utils.loss import IoU, structure_loss
 from utils.transform import joint_transform, img_transform, target_transform
 
@@ -27,31 +26,18 @@ from utils.transform import joint_transform, img_transform, target_transform
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 os.environ['CUDA_VISIBLE_DEVICES'] = "0, 1"
+cudnn.benchmark = True
 seed_torch(seed=2022)
 device_ids = [0]  # 设定可用的GPU
 
 '''Loading criterion'''
-# ce_loss = CrossEntropyLoss(ignore_index=0)
-# '''Diceis used when the distribution of positive and negative samples is extremely unbalanced
-#     usually combine ce or Focal'''
-# dice_loss = DiceLoss(mode='multiclass', ignore_index=0)
-# '''IoU Loss'''
-# jaccard_loss = JaccardLoss(mode='multiclass')
-# '''use  alpha to adjust teh imblance of positive and negative samples'''
-# focal_loss = FocalLoss(mode='multiclass', ignore_index=0, alpha=0.5)
-# '''Smoothing Jaccard loss'''
-# lovasz_loss = LovaszLoss(mode='multiclass', ignore_index=0)
-# # criterion = ce_loss.cuda(device=device_ids[0])
-# criterion = JointLoss(ce_loss, jaccard_loss).cuda(device=device_ids[0])
-# criterion2 = JointLoss(ce_loss, focal_loss).cuda(device=device_ids[0])
+# criterion_name = "bcew"
 bce_loss = BCEWithLogitsLoss().cuda(device=device_ids[0])
 iou_loss = IoU().cuda(device=device_ids[0])
 struct_Loss = structure_loss().cuda(device=device_ids[0])
 
 
 def bce_iou_loss(pred, target):
-    if pred.size() != target.size():
-        target = torch.repeat_interleave(target, pred.size()[1], dim=1)
     bce_out = bce_loss(pred, target)
     iou_out = iou_loss(pred, target)
     return bce_out + iou_out
@@ -70,13 +56,15 @@ def main(args):
     logger = initial_logger(log_name)  # log file
 
     '''Model Settings'''
-    model = PFNet(bk=args['backbone'], model_path=args['backbone_path'], num_classes=2)
+    model = PFNet(bk=args['backbone'], model_path=args['backbone_path'])
     if not args['model_init']:
         weights_init(model)
     model = model.cuda(device=device_ids[0])
+
     '''Loading Datasets'''
     train_imgs_dir, val_imgs_dir = join(args["data_dir"], "train/images"), join(args["data_dir"], "val/images")
     train_labels_dir, val_labels_dir = join(args["data_dir"], "train/gt"), join(args["data_dir"], "val/gt")
+
     train_data = ImageFolder(imgs_dir=train_imgs_dir, labels_dir=train_labels_dir, joint_transform=joint_transform,
                              image_transform=img_transform, target_transform=target_transform)
     val_data = ImageFolder(imgs_dir=val_imgs_dir, labels_dir=val_labels_dir, joint_transform=joint_transform,
@@ -121,7 +109,7 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
     train_loss_total_epochs, valid_loss_total_epochs = list(), list()
     epoch_lr, epoch_iou, epoch_mpa = list(), list(), list()
     '''Train & val'''
-    best_iou, best_mpa = .0, .0
+    best_iou, best_mpa = .1, .1
     best_epoch, last_index = 0, 0.
     filename = ""
     curr_iter = 0
@@ -204,15 +192,12 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
                     logger.info('[val] epoch:{} iter:{}/{} loss:{:.4f}'.format(
                         epoch, batch_idx, val_loader_len, val_loss.average()))
                 '''以下部分由于数据集的图片是二分类图像，故采用以下方式处理'''
-                outputs = predict_4
                 # outputs = torch.where(outputs > 0.5, torch.ones_like(outputs), torch.zeros_like(outputs))
-                outputs = torch.argmax(outputs, dim=1)
-                outputs = outputs.cpu().detach().numpy()
-                for (output, target) in zip(outputs, label):
-                    acc, _ = OverallAccuracy(output, target)
-                    mpa = Acc(output, target.cpu().squeeze(0), ignore_zero=False, num_classes=2)
-                    fwiou = FWIoU(output, target.cpu(
-                    ).squeeze(0), num_classes=2, ignore_zero=False)
+                outputs = predict_4.cpu().detach().numpy()
+                for (outputs, target) in zip(outputs, label):
+                    acc, valid_sum = binary_accuracy(outputs, target)
+                    mpa = Acc(outputs.squeeze(), target.cpu().squeeze(), ignore_zero=False)
+                    fwiou = FWIoU(outputs.squeeze(), target.cpu().squeeze(), ignore_zero=False)
                     acc_meter.update(acc, num=batch_size)
                     mpa_meter.update(mpa, num=batch_size)
                     fwIoU_meter.update(fwiou, num=batch_size)
@@ -275,15 +260,13 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
 
 if __name__ == '__main__':
     args = dict(
-        model_name='PFNet_resnet50_MixWise3',
-        # model_name='PFNet_swinTbase',
+        model_name='PFNet_resnet50_MixWise_ESPCN1',
         backbone='resnet50',
-        # backbone='swinT_base',
-        backbone_path='./params/resnet/resnet50.pth',
+        backbone_path="./params/resnet/resnet50.pth",
         model_init=True,  # if backbone_path is None, Set False Please.
 
         epoch_num=500,
-        training_batch_size=6,  # 以8为基数效果更佳
+        training_batch_size=2,  # 以8为基数效果更佳
         data_dir=r"dataset/MarineFarm_80",
 
         epoch_start=0,

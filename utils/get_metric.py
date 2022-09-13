@@ -20,7 +20,7 @@ def smooth(v, w=0.85):
     return smoothed
 
 
-def binary_accuracy(pred, label):
+def OverallAccuracy(pred, label):
     valid = (label < 2)
     acc_sum = (valid * (pred == label)).sum()
     valid_sum = valid.sum()

@@ -4,13 +4,14 @@
     @Time : 2022/7/23 17:22
     @Author : FaweksLee
     @Email : 121106010719@njust.edu.cn
-    @File : PFNet_ASPP_Depthwise
+    @File : PFNet_ASPP_Depthwise_TailESPCN
     @Description : Inspired by PFNet & Deeplabv3
 """
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from nets.backbone.ESPCN import ESPC
 from nets.backbone.bk import Backbone
 
 
@@ -28,6 +29,9 @@ class BasicConv2d(nn.Module):
         x = self.conv(x)
         x = self.bn(x)
         return x
+
+
+'''Used in Bottle'''
 
 
 class TextureEnhancedModule(nn.Module):
@@ -144,37 +148,6 @@ class SA_Block(nn.Module):
 
 
 ###################################################################
-# ##################### Positioning Module ########################
-###################################################################
-class Positioning(nn.Module):
-    def __init__(self, channel, output_channel):
-        super(Positioning, self).__init__()
-        self.channel = channel
-        self.cab = CA_Block(self.channel)
-        self.sab = SA_Block(self.channel)
-        self.map = nn.Conv2d(self.channel, output_channel, 7, 1, 3)
-
-    def forward(self, x):
-        cab = self.cab(x)
-        sab = self.sab(cab)
-        map = self.map(sab)
-
-        return sab, map
-
-
-###################################################################
-# ######################## Focus Module ###########################
-###################################################################
-def check_channels(tensor1, tensor2):
-    if tensor1.size()[1] != tensor2.size()[1] and tensor1.size()[2:] == tensor2.size()[2:]:
-        Tensor1 = torch.repeat_interleave(tensor1, tensor2.size()[1], dim=1)
-        Tensor2 = torch.repeat_interleave(tensor2, tensor1.size()[1], dim=1)
-        return Tensor1, Tensor2
-    else:
-        return tensor1, tensor2
-
-
-###################################################################
 # ################## Context Exploration Block ####################
 ###################################################################
 class Context_Exploration_Block(nn.Module):
@@ -249,56 +222,72 @@ class Context_Exploration_Block(nn.Module):
         return ce
 
 
+###################################################################
+# ##################### Positioning Module ########################
+###################################################################
+class Positioning(nn.Module):
+    def __init__(self, channel):
+        super(Positioning, self).__init__()
+        self.channel = channel
+        self.cab = CA_Block(self.channel)
+        self.sab = SA_Block(self.channel)
+        self.map = nn.Conv2d(self.channel, 1, 7, 1, 3)
+
+    def forward(self, x):
+        cab = self.cab(x)
+        sab = self.sab(cab)
+        map = self.map(sab)
+
+        return sab, map
+
+
+###################################################################
+# ######################## Focus Module ###########################
+###################################################################
 class Focus(nn.Module):
-    def __init__(self, channel1, channel2, output_classes):
+    def __init__(self, channel1, channel2):
         super(Focus, self).__init__()
         self.channel1 = channel1
         self.channel2 = channel2
 
         self.up = nn.Sequential(nn.Conv2d(self.channel2, self.channel1, 7, 1, 3),
-                                nn.BatchNorm2d(self.channel1), nn.ReLU(), nn.UpsamplingBilinear2d(scale_factor=2))
-
+                                nn.BatchNorm2d(self.channel1), nn.ReLU(),)
+                                # nn.UpsamplingBilinear2d(scale_factor=2))
         # self.input_map = nn.Sequential(nn.UpsamplingBilinear2d(scale_factor=2), nn.Sigmoid())
-        self.input_map = nn.UpsamplingBilinear2d(scale_factor=2)
-        self.output_map = nn.Sequential(nn.Conv2d(self.channel1, output_classes, 7, 1, 3),
-                                        nn.ReLU(inplace=True))
+        self.output_map = nn.Conv2d(self.channel1, 1, 7, 1, 3)
         self.fp = Context_Exploration_Block(self.channel1)
         self.fn = Context_Exploration_Block(self.channel1)
         self.alpha = nn.Parameter(torch.ones(1))
         self.beta = nn.Parameter(torch.ones(1))
-        self.bn1 = nn.BatchNorm2d(self.channel1)
-        self.relu1 = nn.ReLU()
-        self.bn2 = nn.BatchNorm2d(self.channel1)
-        self.relu2 = nn.ReLU()
+        self.br1 = nn.Sequential(nn.BatchNorm2d(self.channel1), nn.ReLU())
+        self.br2 = nn.Sequential(nn.BatchNorm2d(self.channel1), nn.ReLU())
 
     def forward(self, x, y, in_map):
-        # x; current-level features
-        # y: higher-level features
-        # in_map: higher-level prediction
+        # x: current-level features, cr2:128,64,64
+        # y: higher-level features, focus3,256,32,32
+        # in_map: higher-level prediction, predict3,1,32,32
 
         up = self.up(y)
 
-        input_map = self.input_map(in_map)
-        x, input_map = check_channels(x, input_map)
+        # input_map = self.input_map(in_map)
+        input_map = in_map
         f_feature = x * input_map
         b_feature = x * (1 - input_map)
-        if f_feature.size()[1] != self.channel1:
-            f_feature = nn.Conv2d(f_feature.size()[1], self.channel1, 1, 1, 0).cuda(device=f_feature.device)(f_feature)
-            b_feature = nn.Conv2d(b_feature.size()[1], self.channel1, 1, 1, 0).cuda(device=b_feature.device)(b_feature)
+
         fp = self.fp(f_feature)
         fn = self.fn(b_feature)
 
         refine1 = up - (self.alpha * fp)
-        refine1 = self.bn1(refine1)
-        refine1 = self.relu1(refine1)
+        refine1 = self.br1(refine1)
 
         refine2 = refine1 + (self.beta * fn)
-        refine2 = self.bn2(refine2)
-        refine2 = self.relu2(refine2)
+        refine2 = self.br2(refine2)
 
         output_map = self.output_map(refine2)
 
         return refine2, output_map
+
+
 ###################################################################
 # ########################## NETWORK ##############################
 ###################################################################
@@ -311,8 +300,30 @@ backbone_names2 = [  # C: 1024,512,256,128
 
 
 class PFNet(nn.Module):
-    def __init__(self, model_path=None, bk='resnet50', num_classes=1):
+    def __init__(self, model_path=None, bk='resnet50'):
         super(PFNet, self).__init__()
+        self.pixelShuffle = nn.Sequential(
+            ESPC(in_channel=512, upscale_factor=2),
+            nn.BatchNorm2d(512),
+            nn.ReLU(inplace=True)
+        )
+        self.pixelShuffle3foc = nn.Sequential(
+            ESPC(in_channel=256, upscale_factor=2),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True)
+        )
+        self.pixelShuffle3pre = nn.Sequential(
+            ESPC(in_channel=1, upscale_factor=2),
+            nn.BatchNorm2d(1),
+            nn.ReLU(inplace=True)
+        )
+        self.pixelShuffle2foc = nn.Sequential(
+            ESPC(in_channel=128, upscale_factor=2),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True)
+        )
+        self.pixelShuffle2pre = self.pixelShuffle3pre
+        self.pixelShuffle1pre = self.pixelShuffle3pre
         # params
         self.model = bk
         # backbone
@@ -326,11 +337,11 @@ class PFNet(nn.Module):
             self.cr1 = TextureEnhancedModule(256, 64)
 
             # positioning
-            self.positioning = Positioning(512, num_classes)
+            self.positioning = Positioning(512)
             # focus
-            self.focus3 = Focus(256, 512, num_classes)
-            self.focus2 = Focus(128, 256, num_classes)
-            self.focus1 = Focus(64, 128, num_classes)
+            self.focus3 = Focus(256, 512)
+            self.focus2 = Focus(128, 256)
+            self.focus1 = Focus(64, 128)
         elif bk in backbone_names2:
             # channel reduction
             self.cr4 = TextureEnhancedModule(1024, 256)
@@ -338,22 +349,23 @@ class PFNet(nn.Module):
             self.cr2 = TextureEnhancedModule(256, 64)
             self.cr1 = TextureEnhancedModule(128, 32)
             # positioning
-            self.positioning = Positioning(256, num_classes)
+            self.positioning = Positioning(256)
             # focus
-            self.focus3 = Focus(128, 256, num_classes)
-            self.focus2 = Focus(64, 128, num_classes)
-            self.focus1 = Focus(32, 64, num_classes)
-
+            self.focus3 = Focus(128, 256)
+            self.focus2 = Focus(64, 128)
+            self.focus1 = Focus(32, 64)
         for m in self.modules():
             if isinstance(m, nn.ReLU):
                 m.inplace = True
 
     def forward(self, x):
+        # x = self.pixelShuffle(x)
         # x: [batch_size, channel=3, h, w]
         layer1, layer2, layer3, layer4 = self.backbone(x, self.model)
 
         # channel reduction
         cr4 = self.cr4(layer4)
+        cr4 = self.pixelShuffle(cr4)
         cr3 = self.cr3(layer3)
         cr2 = self.cr2(layer2)
         cr1 = self.cr1(layer1)
@@ -363,8 +375,11 @@ class PFNet(nn.Module):
 
         # focus
         focus3, predict3 = self.focus3(cr3, positioning, predict4)
+        focus3, predict3 = self.pixelShuffle3foc(focus3), self.pixelShuffle3pre(predict3)
         focus2, predict2 = self.focus2(cr2, focus3, predict3)
-        focus1, predict1 = self.focus1(cr1, focus2, predict2)
+        focus2, predict2 = self.pixelShuffle2foc(focus2), self.pixelShuffle2pre(predict2)
+        _, predict1 = self.focus1(cr1, focus2, predict2)
+        predict1 = self.pixelShuffle1pre(predict1)
         # rescale
         predict4 = F.interpolate(predict4, size=x.size()[2:], mode='bilinear', align_corners=True)
         predict3 = F.interpolate(predict3, size=x.size()[2:], mode='bilinear', align_corners=True)

@@ -10,15 +10,19 @@
 import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
+from tifffile import imread
+from PIL import Image
+from torchvision.transforms import transforms
 
 
-class ESPCNet(nn.Module):
-    def __init__(self, upscale_factor):
-        super(ESPCNet, self).__init__()
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+class ESPC(nn.Module):
+    def __init__(self, in_channel, upscale_factor):
+        super(ESPC, self).__init__()
+        self.conv1 = nn.Conv2d(in_channel, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
         self.conv2 = nn.Conv2d(64, 32, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
-        self.conv3 = nn.Conv2d(32, (upscale_factor ** 2), kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+        self.conv3 = nn.Conv2d(32, in_channel*(upscale_factor ** 2), kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
         self.pixel_shuffle = nn.PixelShuffle(upscale_factor)
+        # self.Relu = nn.ReLU(inplace=True)
 
     def forward(self, x):
         x = torch.relu(self.conv1(x))  # [b, 3, H, W]->[b, 64, H, W]
@@ -30,12 +34,14 @@ class ESPCNet(nn.Module):
 
 
 if __name__ == '__main__':
-    model = ESPCNet(upscale_factor=3)
-    print(model)
-    oritensor = torch.randn(1, 3, 512, 512)
-    oritensor = torch.clamp(oritensor, 0, 1)
-    newtensor = torch.clamp(model(oritensor), 0, 1)
-    orinumpy = oritensor.detach().squeeze().permute(1, 2, 0).numpy()
+    # path = '../5.tif'
+    # img = imread(path, mode='r')
+    img = Image.open('../3.png').convert("L")
+    tens = transforms.ToTensor()(img)
+    tens = tens.unsqueeze(0)
+    orinumpy = img
+    model = ESPC(in_channel=1, upscale_factor=2)
+    newtensor = model(tens)
     newnumpy = newtensor.detach().squeeze(0).permute(1, 2, 0).numpy()
     plt.imshow(orinumpy)
     plt.title('original noise')

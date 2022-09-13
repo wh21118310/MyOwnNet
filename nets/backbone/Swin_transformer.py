@@ -624,7 +624,6 @@ class SwinTransformer(nn.Module):
             pretrained (str, optional): Path to pretrained weights.
             Defaults to None.
         """
-
         def _init_weights(m):
             if isinstance(m, nn.Linear):
                 trunc_normal_(m.weight, std=.02)
