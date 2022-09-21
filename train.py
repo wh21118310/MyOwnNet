@@ -22,7 +22,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 # from nets.PFNet import PFNet
 # from nets.base import PFNet
-from nets.base_MixWise_new import PFNet
+from nets.base_MixWise import PFNet
 # from nets.base_MixTEM_PM_new import PFNet
 # from nets.base_MixTEM_PM_UP import PFNet
 # from nets.PFNet_ASPP_Mixwise import PFNet

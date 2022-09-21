@@ -33,11 +33,8 @@ class BasicConv2d(nn.Module):
 class TextureEnhancedModule(nn.Module):
     def __init__(self, in_channels: int, out_channels: int) -> None:
         super(TextureEnhancedModule, self).__init__()
-        self.relu = nn.ReLU(inplace=True)
         # self.tem_channels = in_channels // 4  # 原版未使用此形式，而是输出通道为out_channels
-        self.branch0 = nn.Sequential(
-            BasicConv2d(in_channels, out_channels, 1)
-        )
+        # self.branch0 = BasicConv2d(in_channels, out_channels, 1)
         self.branch1 = nn.Sequential(
             BasicConv2d(in_channels, out_channels, 1),
             BasicConv2d(out_channels, out_channels, kernel_size=(1, 3), padding=(0, 1)),
@@ -65,16 +62,26 @@ class TextureEnhancedModule(nn.Module):
             BasicConv2d(out_channels, out_channels, kernel_size=1),
             BasicConv2d(out_channels, out_channels, kernel_size=3, padding=7, dilation=7)
         )
+        self.branch4 = nn.Sequential(
+            BasicConv2d(in_channels, out_channels, 1),
+            BasicConv2d(out_channels, out_channels, kernel_size=(1, 9), padding=(0, 4)),
+            BasicConv2d(out_channels, out_channels, kernel_size=(9, 1), padding=(4, 0)),
+            BasicConv2d(out_channels, out_channels, kernel_size=9, groups=out_channels, padding=4),
+            # BasicConv2d(out_channels, out_channels, kernel_size=7, padding=9, groups=out_channels, dilation=3),
+            BasicConv2d(out_channels, out_channels, kernel_size=1),
+            BasicConv2d(out_channels, out_channels, kernel_size=3, padding=9, dilation=9)
+        )
         self.conv_cat = BasicConv2d(4 * out_channels, out_channels, 3, padding=1)
         self.conv_res = BasicConv2d(in_channels, out_channels, 1)
-
+        self.relu = nn.ReLU(inplace=True)
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x0 = self.branch0(x)
+        # x0 = self.branch0(x)
         x1 = self.branch1(x)
         x2 = self.branch2(x)
         x3 = self.branch3(x)
-        x_cat = self.conv_cat(torch.cat((x0, x1, x2, x3), 1))
-        x = self.relu(x_cat + self.conv_res(x))
+        x4 = self.branch4(x)
+        x_cat = self.conv_cat(torch.cat((x4, x1, x2, x3), 1) + x)
+        x = self.relu(x_cat)
         return x
 
 
