@@ -37,26 +37,26 @@ class SegmentationMetric(object):
         return tp, fp, tn, fn
 
     def Precision(self):
-        tp, fp, tn, fn = self.get_tp_fp_tn_fn()
-        precision = tp / (tp + fp)
-        return precision
+        precision = np.diag(self.confusionMatrix) / (self.confusionMatrix.sum(axis=0) + self.eps)
+        return precision.mean()
 
     def Recall(self):
-        tp, fp, tn, fn = self.get_tp_fp_tn_fn()
-        recall = tp / (tp + fn)
+        recall = np.diag(self.confusionMatrix) / (self.confusionMatrix.sum(axis=1) + self.eps)
         return recall
 
     def F1(self):
-        tp, fp, tn, fn = self.get_tp_fp_tn_fn()
-        precision = tp / (tp + fp)
-        recall = tp / (tp + fn)
+        precision = self.Precision()
+        recall = self.Recall()
         F1 = (2.0 * precision * recall) / (precision + recall)
         return F1
 
-    def pixelAccuracy(self):
+    def pixelAccuracy(self):  # OA
         # return all class overall pixel accuracy
-        # acc = (TP + TN) / (TP + TN + FP + TN)
-        acc = np.diag(self.confusionMatrix).sum() / (self.confusionMatrix.sum() + self.eps)
+        # acc = (TP + TN) / (TP + TN + FP + FN)
+        acc = np.diag(self.confusionMatrix).sum() / (np.diag(self.confusionMatrix).sum() +
+                                                     self.confusionMatrix.sum(axis=0) +
+                                                     self.confusionMatrix.sum(axis=1) -
+                                                     2 * np.diag(self.confusionMatrix) + self.eps)
         return acc
 
     def classPixelAccuracy(self):
@@ -71,25 +71,31 @@ class SegmentationMetric(object):
         return meanAcc
 
     def Dice(self):
-        tp, fp, tn, fn = self.get_tp_fp_tn_fn()
-        Dice = 2 * tp / ((tp + fp) + (tp + fn))
+        Dice = 2 * np.diag(self.confusionMatrix) / (self.confusionMatrix.sum(axis=0) +
+                                                    self.confusionMatrix.sum(axis=1) + self.eps)
         return Dice
 
     def IoU(self):
-        tp, fp, tn, fn = self.get_tp_fp_tn_fn()
-        IoU = tp / (tp + fn + fp + self.eps)
+        IoU = np.diag(self.confusionMatrix) / (self.confusionMatrix.sum(axis=1) +
+                                               self.confusionMatrix.sum(axis=0) -
+                                               np.diag(self.confusionMatrix))
         return IoU
 
     def meanIntersectionOverUnion(self):
         # Intersection = TP Union = TP + FP + FN
         # IoU = TP / (TP + FP + FN)
-        # intersection = np.diag(self.confusionMatrix)
-        # union = np.sum(self.confusionMatrix, axis=1) + np.sum(self.confusionMatrix, axis=0) - np.diag(
-        #     self.confusionMatrix)
         # IoU = intersection / union
         iou = self.IoU()
         mIoU = np.nanmean(iou)
         return mIoU
+
+    def Frequency_Weighted_Intersection_over_Union(self):
+        # FWIoU =     [(TP+FN)/(TP+FP+TN+FN)] *[TP / (TP + FP + FN)]
+        freq = np.sum(self.confusionMatrix, axis=1) / (np.sum(self.confusionMatrix) + self.eps)
+        iou = self.IoU()
+        # FWIoU = (iou * freq).sum()
+        FWIoU = (freq[freq > 0] * iou[freq > 0]).sum()
+        return FWIoU
 
     def genConfusionMatrix(self, imgPredict, imgLabel):
         # remove classes from unlabeled pixels in gt images and predict
@@ -98,16 +104,6 @@ class SegmentationMetric(object):
         count = np.bincount(label, minlength=self.numClass ** 2)
         confusionMatrix = count.reshape(self.numClass, self.numClass)
         return confusionMatrix
-
-    def Frequency_Weighted_Intersection_over_Union(self):
-        # FWIoU =     [(TP+FN)/(TP+FP+TN+FN)] *[TP / (TP + FP + FN)]
-        freq = np.sum(self.confusionMatrix, axis=1) / (np.sum(self.confusionMatrix) + self.eps)
-        # iu = np.diag(self.confusionMatrix) / (np.sum(self.confusionMatrix, axis=1) +
-        #                                       np.sum(self.confusionMatrix, axis=0) -
-        #                                       np.diag(self.confusionMatrix))
-        iou = self.IoU()
-        FWIoU = (freq[freq > 0] * iou[freq > 0]).sum()
-        return FWIoU
 
     def addBatch(self, imgPredict, imgLabel):
         assert imgPredict.shape == imgLabel.shape, 'Predict shape:{}, label shape:{}'.format(imgPredict.shape,

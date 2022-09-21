@@ -90,12 +90,12 @@ class SA_Block(nn.Module):
 # ##################### Positioning Module ########################
 ###################################################################
 class Positioning(nn.Module):
-    def __init__(self, channel, output_channel):
+    def __init__(self, channel):
         super(Positioning, self).__init__()
         self.channel = channel
         self.cab = CA_Block(self.channel)
         self.sab = SA_Block(self.channel)
-        self.map = nn.Conv2d(self.channel, output_channel, 7, 1, 3)
+        self.map = nn.Conv2d(self.channel, 1, 7, 1, 3)
 
     def forward(self, x):
         cab = self.cab(x)
@@ -106,15 +106,9 @@ class Positioning(nn.Module):
 
 
 ###################################################################
-# ######################## Focus Module ###########################
+######################### Focus Module ###########################
 ###################################################################
-def check_channels(tensor1, tensor2):
-    if tensor1.size()[1] != tensor2.size()[1] and tensor1.size()[2:] == tensor2.size()[2:]:
-        Tensor1 = torch.repeat_interleave(tensor1, tensor2.size()[1], dim=1)
-        Tensor2 = torch.repeat_interleave(tensor2, tensor1.size()[1], dim=1)
-        return Tensor1, Tensor2
-    else:
-        return tensor1, tensor2
+
 
 
 ###################################################################
@@ -193,7 +187,7 @@ class Context_Exploration_Block(nn.Module):
 
 
 class Focus(nn.Module):
-    def __init__(self, channel1, channel2, output_classes):
+    def __init__(self, channel1, channel2):
         super(Focus, self).__init__()
         self.channel1 = channel1
         self.channel2 = channel2
@@ -203,7 +197,7 @@ class Focus(nn.Module):
 
         # self.input_map = nn.Sequential(nn.UpsamplingBilinear2d(scale_factor=2), nn.Sigmoid())
         self.input_map = nn.UpsamplingBilinear2d(scale_factor=2)
-        self.output_map = nn.Sequential(nn.Conv2d(self.channel1, output_classes, 7, 1, 3),
+        self.output_map = nn.Sequential(nn.Conv2d(self.channel1, 1, 7, 1, 3),
                                         nn.ReLU(inplace=True))
         self.fp = Context_Exploration_Block(self.channel1)
         self.fn = Context_Exploration_Block(self.channel1)
@@ -222,12 +216,8 @@ class Focus(nn.Module):
         up = self.up(y)
 
         input_map = self.input_map(in_map)
-        x, input_map = check_channels(x, input_map)
         f_feature = x * input_map
         b_feature = x * (1 - input_map)
-        if f_feature.size()[1] != self.channel1:
-            f_feature = nn.Conv2d(f_feature.size()[1], self.channel1, 1, 1, 0).cuda(device=f_feature.device)(f_feature)
-            b_feature = nn.Conv2d(b_feature.size()[1], self.channel1, 1, 1, 0).cuda(device=b_feature.device)(b_feature)
         fp = self.fp(f_feature)
         fn = self.fn(b_feature)
 
@@ -256,7 +246,7 @@ backbone_names2 = [  # C: 1024,512,256,128
 
 
 class PFNet(nn.Module):
-    def __init__(self, bk='resnet50', model_path=None, num_classes=1):
+    def __init__(self, bk='resnet50', model_path=None):
         super(PFNet, self).__init__()
         # params
         self.model = bk
@@ -270,11 +260,11 @@ class PFNet(nn.Module):
             self.cr2 = nn.Sequential(nn.Conv2d(512, 128, 3, 1, 1), nn.BatchNorm2d(128), nn.ReLU())
             self.cr1 = nn.Sequential(nn.Conv2d(256, 64, 3, 1, 1), nn.BatchNorm2d(64), nn.ReLU())
             # positioning
-            self.positioning = Positioning(512, num_classes)
+            self.positioning = Positioning(512)
             # focus
-            self.focus3 = Focus(256, 512, num_classes)
-            self.focus2 = Focus(128, 256, num_classes)
-            self.focus1 = Focus(64, 128, num_classes)
+            self.focus3 = Focus(256, 512)
+            self.focus2 = Focus(128, 256)
+            self.focus1 = Focus(64, 128)
         elif self.model in backbone_names2:
             # channel reduction
             self.cr4 = nn.Sequential(nn.Conv2d(1024, 256, 3, 1, 1), nn.BatchNorm2d(256), nn.ReLU())
@@ -282,11 +272,11 @@ class PFNet(nn.Module):
             self.cr2 = nn.Sequential(nn.Conv2d(256, 64, 3, 1, 1), nn.BatchNorm2d(64), nn.ReLU())
             self.cr1 = nn.Sequential(nn.Conv2d(128, 32, 3, 1, 1), nn.BatchNorm2d(32), nn.ReLU())
             # positioning
-            self.positioning = Positioning(256, num_classes)
+            self.positioning = Positioning(256)
             # focus
-            self.focus3 = Focus(128, 256, num_classes)
-            self.focus2 = Focus(64, 128, num_classes)
-            self.focus1 = Focus(32, 64, num_classes)
+            self.focus3 = Focus(128, 256)
+            self.focus2 = Focus(64, 128)
+            self.focus1 = Focus(32, 64)
 
         for m in self.modules():
             if isinstance(m, nn.ReLU):
@@ -315,12 +305,7 @@ class PFNet(nn.Module):
         predict3 = F.interpolate(predict3, size=x.size()[2:], mode='bilinear', align_corners=True)
         predict2 = F.interpolate(predict2, size=x.size()[2:], mode='bilinear', align_corners=True)
         predict1 = F.interpolate(predict1, size=x.size()[2:], mode='bilinear', align_corners=True)
-
-        if self.training:
-            return predict4, predict3, predict2, predict1
-            # return predict1
-        return torch.sigmoid(predict4), torch.sigmoid(predict3), torch.sigmoid(predict2), torch.sigmoid(
-            predict1)
+        return predict4, predict3, predict2, predict1
         # return torch.sigmoid(predict1)
 
 
@@ -328,6 +313,6 @@ if __name__ == '__main__':
     data = torch.rand((4, 3, 512, 512)).cuda()
     # net = PFNet(bk='swinT_base').cuda()
     # net = PFNet()
-    net = PFNet(num_classes=1).cuda()
+    net = PFNet().cuda()
     result = net(data)
     print(result)

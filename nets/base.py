@@ -163,11 +163,6 @@ class Positioning(nn.Module):
 
 
 ###################################################################
-# ######################## Focus Module ###########################
-###################################################################
-
-
-###################################################################
 # ################## Context Exploration Block ####################
 ###################################################################
 class Context_Exploration_Block(nn.Module):
@@ -189,58 +184,81 @@ class Context_Exploration_Block(nn.Module):
             nn.Conv2d(self.input_channels, self.channels_single, 1, 1, 0),
             nn.BatchNorm2d(self.channels_single), nn.ReLU())
 
+        # self.p1 = nn.Sequential(
+        #     nn.Conv2d(in_channels=self.channels_single, out_channels=self.channels_single, kernel_size=1, stride=1,
+        #               padding=0),
+        #     nn.BatchNorm2d(self.channels_single), nn.ReLU())
         self.p1 = nn.Sequential(
-            nn.Conv2d(self.channels_single, self.channels_single, 1, 1, 0),
-            nn.BatchNorm2d(self.channels_single), nn.ReLU())
-        self.p1_dc = nn.Sequential(
-            nn.Conv2d(self.channels_single, self.channels_single, kernel_size=3, stride=1, padding=1, dilation=1),
+            nn.Conv2d(in_channels=self.channels_single, out_channels=self.channels_single, kernel_size=(3, 1), stride=1,
+                      padding=(1, 0), dilation=1),
+            nn.BatchNorm2d(self.channels_single), nn.ReLU(),
+            nn.Conv2d(in_channels=self.channels_single, out_channels=self.channels_single, kernel_size=(1, 3),
+                      stride=1, padding=(0, 1), dilation=1),
             nn.BatchNorm2d(self.channels_single), nn.ReLU())
 
+        # self.p2 = nn.Sequential(
+        #     nn.Conv2d(in_channels=self.channels_single, out_channels=self.channels_single, kernel_size=3, stride=1,
+        #               padding=1),
+        #     nn.BatchNorm2d(self.channels_single), nn.ReLU())
         self.p2 = nn.Sequential(
-            nn.Conv2d(self.channels_single, self.channels_single, 3, 1, 1),
-            nn.BatchNorm2d(self.channels_single), nn.ReLU())
-        self.p2_dc = nn.Sequential(
-            nn.Conv2d(self.channels_single, self.channels_single, kernel_size=3, stride=1, padding=2, dilation=2),
-            nn.BatchNorm2d(self.channels_single), nn.ReLU())
+            nn.Conv2d(in_channels=self.channels_single, out_channels=self.channels_single, kernel_size=(3, 1), stride=1,
+                      padding=(2, 0), dilation=2),
+            nn.BatchNorm2d(self.channels_single), nn.ReLU(),
+            nn.Conv2d(in_channels=self.channels_single, out_channels=self.channels_single, kernel_size=(1, 3),
+                      stride=1, padding=(0, 2), dilation=2)
+        )
 
+        # self.p3 = nn.Sequential(
+        #     nn.Conv2d(in_channels=self.channels_single, out_channels=self.channels_single, kernel_size=5, stride=1,
+        #               padding=2),
+        #     nn.BatchNorm2d(self.channels_single), nn.ReLU())
         self.p3 = nn.Sequential(
-            nn.Conv2d(self.channels_single, self.channels_single, 5, 1, 2),
-            nn.BatchNorm2d(self.channels_single), nn.ReLU())
-        self.p3_dc = nn.Sequential(
-            nn.Conv2d(self.channels_single, self.channels_single, kernel_size=3, stride=1, padding=4, dilation=4),
-            nn.BatchNorm2d(self.channels_single), nn.ReLU())
+            nn.Conv2d(in_channels=self.channels_single, out_channels=self.channels_single, kernel_size=(3, 1), stride=1,
+                      padding=(4, 0), dilation=4),
+            nn.BatchNorm2d(self.channels_single), nn.ReLU(),
+            nn.Conv2d(in_channels=self.channels_single, out_channels=self.channels_single, kernel_size=(1, 3), stride=1, padding=(0, 4), dilation=4),
+            nn.BatchNorm2d(self.channels_single), nn.ReLU()
+        )
 
+        # self.p4 = nn.Sequential(
+        #     nn.Conv2d(in_channels=self.channels_single, out_channels=self.channels_single, kernel_size=7, stride=1,
+        #               padding=3),
+        #     nn.BatchNorm2d(self.channels_single), nn.ReLU())
         self.p4 = nn.Sequential(
-            nn.Conv2d(self.channels_single, self.channels_single, 7, 1, 3),
-            nn.BatchNorm2d(self.channels_single), nn.ReLU())
-        self.p4_dc = nn.Sequential(
-            nn.Conv2d(self.channels_single, self.channels_single, kernel_size=3, stride=1, padding=8, dilation=8),
-            nn.BatchNorm2d(self.channels_single), nn.ReLU())
+            nn.Conv2d(in_channels=self.channels_single, out_channels=self.channels_single, kernel_size=(3, 1), stride=1, padding=(8, 0), dilation=8),
+            nn.BatchNorm2d(self.channels_single), nn.ReLU(),
+            nn.Conv2d(in_channels=self.channels_single, out_channels=self.channels_single, kernel_size=(1, 3), stride=1, padding=(0, 8), dilation=8),
+            nn.BatchNorm2d(self.channels_single), nn.ReLU()
+        )
 
-        self.fusion = nn.Sequential(nn.Conv2d(self.input_channels, self.input_channels, 1, 1, 0),
+        self.fusion = nn.Sequential(nn.Conv2d(self.input_channels * 2, self.input_channels, 1, 1, 0),
                                     nn.BatchNorm2d(self.input_channels), nn.ReLU())
 
     def forward(self, x):
         p1_input = self.p1_channel_reduction(x)
         p1 = self.p1(p1_input)
-        p1_dc = self.p1_dc(p1)
+        # p1_dc = self.p1_dc(p1)
 
-        p2_input = self.p2_channel_reduction(x) + p1_dc
+        p2_input = self.p2_channel_reduction(x) + p1
         p2 = self.p2(p2_input)
-        p2_dc = self.p2_dc(p2)
+        # p2_dc = self.p2_dc(p2)
 
-        p3_input = self.p3_channel_reduction(x) + p2_dc
+        p3_input = self.p3_channel_reduction(x) + p2
         p3 = self.p3(p3_input)
-        p3_dc = self.p3_dc(p3)
+        # p3_dc = self.p3_dc(p3)
 
-        p4_input = self.p4_channel_reduction(x) + p3_dc
+        p4_input = self.p4_channel_reduction(x) + p3
         p4 = self.p4(p4_input)
-        p4_dc = self.p4_dc(p4)
+        # p4_dc = self.p4_dc(p4)
 
-        ce = self.fusion(torch.cat((p1_dc, p2_dc, p3_dc, p4_dc), 1))
+        ce = self.fusion(torch.cat((p1, p2, p3, p4, x), 1))
 
         return ce
 
+
+###################################################################
+# ######################## Focus Module ###########################
+###################################################################
 
 class Focus(nn.Module):
     def __init__(self, channel1, channel2):
@@ -289,6 +307,8 @@ class Focus(nn.Module):
         output_map = self.output_map(refine2)
 
         return refine2, output_map
+
+
 ###################################################################
 # ########################## NETWORK ##############################
 ###################################################################
@@ -301,7 +321,7 @@ backbone_names2 = [  # C: 1024,512,256,128
 
 
 class PFNet(nn.Module):
-    def __init__(self, model_path=None, bk='resnet50'):
+    def __init__(self, model_path=None, bk='resnet50', num_classes=1):
         super(PFNet, self).__init__()
         # params
         self.model = bk
@@ -333,7 +353,26 @@ class PFNet(nn.Module):
             self.focus3 = Focus(128, 256)
             self.focus2 = Focus(64, 128)
             self.focus1 = Focus(32, 64)
-
+        self.testlayer1 = nn.Sequential(
+            nn.Conv2d(in_channels=256, out_channels=1, kernel_size=1),
+            nn.BatchNorm2d(1),
+            nn.ReLU(True)
+        )
+        self.testlayer2 = nn.Sequential(
+            nn.Conv2d(in_channels=512, out_channels=1, kernel_size=1),
+            nn.BatchNorm2d(1),
+            nn.ReLU(True)
+        )
+        self.testlayer3 = nn.Sequential(
+            nn.Conv2d(in_channels=1024, out_channels=1, kernel_size=1),
+            nn.BatchNorm2d(1),
+            nn.ReLU(True)
+        )
+        self.testlayer4 = nn.Sequential(
+            nn.Conv2d(in_channels=2048, out_channels=1, kernel_size=1),
+            nn.BatchNorm2d(1),
+            nn.ReLU(True)
+        )
         for m in self.modules():
             if isinstance(m, nn.ReLU):
                 m.inplace = True
@@ -341,29 +380,16 @@ class PFNet(nn.Module):
     def forward(self, x):
         # x: [batch_size, channel=3, h, w]
         layer1, layer2, layer3, layer4 = self.backbone(x, self.model)
-
-        # channel reduction
-        cr4 = self.cr4(layer4)
-        cr3 = self.cr3(layer3)
-        cr2 = self.cr2(layer2)
-        cr1 = self.cr1(layer1)
-
-        # positioning
-        positioning, predict4 = self.positioning(cr4)
-
-        # focus
-        focus3, predict3 = self.focus3(cr3, positioning, predict4)
-        focus2, predict2 = self.focus2(cr2, focus3, predict3)
-        focus1, predict1 = self.focus1(cr1, focus2, predict2)
-        # rescale
-        predict4 = F.interpolate(predict4, size=x.size()[2:], mode='bilinear', align_corners=True)
-        predict3 = F.interpolate(predict3, size=x.size()[2:], mode='bilinear', align_corners=True)
-        predict2 = F.interpolate(predict2, size=x.size()[2:], mode='bilinear', align_corners=True)
-        predict1 = F.interpolate(predict1, size=x.size()[2:], mode='bilinear', align_corners=True)
-        # if self.training:
+        layer1 = self.testlayer1(layer1)
+        layer2 = self.testlayer2(layer2)
+        layer3 = self.testlayer3(layer3)
+        layer4 = self.testlayer4(layer4)
+        predict4 = F.interpolate(layer4, size=x.size()[2:], mode='bilinear', align_corners=True)
+        predict3 = F.interpolate(layer3, size=x.size()[2:], mode='bilinear', align_corners=True)
+        predict2 = F.interpolate(layer2, size=x.size()[2:], mode='bilinear', align_corners=True)
+        predict1 = F.interpolate(layer1, size=x.size()[2:], mode='bilinear', align_corners=True)
         return predict4, predict3, predict2, predict1
-        # return torch.sigmoid(predict4), torch.sigmoid(predict3), torch.sigmoid(predict2), torch.sigmoid(
-            # predict1)
+        # channel reduction
 
 
 if __name__ == '__main__':

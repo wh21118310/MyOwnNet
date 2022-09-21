@@ -266,23 +266,23 @@ class AverageMeter(object):
         self.sum = None
         self.count = None
 
-    def initialize(self, val, num=1):
+    def initialize(self, val, count, weight):
         self.val = val
         self.avg = val
-        self.count = num
-        self.sum = val * num
+        self.count = count
+        self.sum = val * weight
         self.initialized = True
 
-    def update(self, val, num=1):
+    def update(self, val, count=1, weight=1):
         if not self.initialized:
-            self.initialize(val, num)
+            self.initialize(val, count, weight)
         else:
-            self.add(val, num)
+            self.add(val, count, weight)
 
-    def add(self, val, num):
+    def add(self, val, count, weight):
         self.val = val
-        self.count += num
-        self.sum += val * num
+        self.count += count
+        self.sum += val * weight
         self.avg = self.sum / self.count
 
     def value(self):

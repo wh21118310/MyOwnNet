@@ -71,8 +71,10 @@ joint_transform = Compose([
     Resize((512, 512))
 ])
 img_transform = transforms.Compose([
+    transforms.Resize((512, 512)),
     transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1),
     transforms.ToTensor(),
-    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    # transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 ])
 target_transform = transforms.ToTensor()
+to_pil = transforms.ToPILImage()
