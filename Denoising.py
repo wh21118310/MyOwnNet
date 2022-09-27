@@ -1,35 +1,30 @@
 # -*- coding: utf-8 -*-
 
 """
-@Time : 2022/5/18
-@Author : FawkesLee
-@File : train_val
-@Description :
+    @Time : 2022/9/27 14:56
+    @Author : FaweksLee
+    @Email : 121106010719@njust.edu.cn
+    @File : Denoising
+    @Description : 
 """
 import glob
 import os.path
 from os.path import exists
 
+from skimage.metrics import peak_signal_noise_ratio as PSNR
+from skimage.metrics import structural_similarity as SSIM
 import matplotlib.pyplot as plt
 from PIL import Image
 from timm.utils import get_state_dict
 from torch.autograd import Variable
 from torch.cuda import empty_cache, synchronize
-from torch.cuda.amp import autocast
-from torch.nn import DataParallel
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-# from nets.PFNet import PFNet
-# from nets.base import PFNet
-from nets.base_MixWise import PFNet
-# from nets.base_MixTEM_PM_new import PFNet
-# from nets.base_MixTEM_PM_UP import PFNet
-# from nets.PFNet_ASPP_Mixwise import PFNet
+from nets.MSDNet import MSDNet
 from utils.arguments import *
 from utils.data_process import weights_init, ImageFolder
-from utils.get_metric import FWIoU, mPA, Precision, Recall, F1
-from utils.loss import IoU, structure_loss
+from utils.get_metric import FWIoU, mPA, Precision
 from utils.transform import joint_transform, img_transform, target_transform, to_pil
 
 '''Config Information'''
@@ -40,28 +35,7 @@ seed_torch(seed=2022)
 device_ids = [0]  # 设定可用的GPU
 
 '''Loading criterion'''
-# ce_loss = CrossEntropyLoss(ignore_index=0)
-# '''Diceis used when the distribution of positive and negative samples is extremely unbalanced
-#     usually combine ce or Focal'''
-# dice_loss = DiceLoss(mode='multiclass', ignore_index=0)
-# '''IoU Loss'''
-# jaccard_loss = JaccardLoss(mode='multiclass')
-# '''use  alpha to adjust teh imblance of positive and negative samples'''
-# focal_loss = FocalLoss(mode='multiclass', ignore_index=0, alpha=0.5)
-# '''Smoothing Jaccard loss'''
-# lovasz_loss = LovaszLoss(mode='multiclass', ignore_index=0)
-# # criterion = ce_loss.cuda(device=device_ids[0])
-# criterion = JointLoss(ce_loss, jaccard_loss).cuda(device=device_ids[0])
-# criterion2 = JointLoss(ce_loss, focal_loss).cuda(device=device_ids[0])
-bce_loss = BCEWithLogitsLoss().cuda(device=device_ids[0])
-iou_loss = IoU().cuda(device=device_ids[0])
-struct_Loss = structure_loss().cuda(device=device_ids[0])
-
-
-def bce_iou_loss(pred, target):
-    bce_out = bce_loss(pred, target)
-    iou_out = iou_loss(pred, target)
-    return bce_out + iou_out
+criterion = MSELoss()
 
 
 def main(args):
@@ -82,7 +56,7 @@ def main(args):
     logger = initial_logger(log_name)  # log file
 
     '''Model Settings'''
-    model = PFNet(bk=args['backbone'], model_path=args['backbone_path'])
+    model = MSDNet(3)
     if not args['model_init']:
         weights_init(model)
     model = model.cuda(device=device_ids[0])
@@ -100,9 +74,9 @@ def main(args):
     # num_workers用于设置是否使用多线程读取数据，1代表关闭多线程。开启后会加快数据读取速度，但是会占用更多内存。
     # Windows只可设定为0
     # ------------------------------------------------------------------#
-    train_loader = DataLoader(train_data, shuffle=True, batch_size=args["training_batch_size"], num_workers=0,
+    train_loader = DataLoader(train_data, shuffle=False, batch_size=args["training_batch_size"], num_workers=0,
                               pin_memory=True)
-    val_loader = DataLoader(val_data, shuffle=True, batch_size=args["training_batch_size"], num_workers=0,
+    val_loader = DataLoader(val_data, shuffle=False, batch_size=args["training_batch_size"], num_workers=0,
                             pin_memory=True)
     args['train_loader'] = train_loader
     args['val_loader'] = val_loader
@@ -117,12 +91,12 @@ def main(args):
     # support for the restart from breakpoint
     if args['Resume'] and exists(args['best_ckpt']):
         checkpoint = torch.load(args['best_ckpt'])
-        model.load_state_dict(checkpoint['backbone'])
+        model.load_state_dict(checkpoint['model'])
         optimizer.load_state_dict(checkpoint['optimizer'])
-        epoch_start = checkpoint['epoch']
+        args['epoch_start'] = checkpoint['epoch']
         # if checkpoint['scheduler'] is not None:
         # scheduler.load_state_dict(checkpoint['scheduler'])
-        args['total_epoch'] = (args['epoch_num'] - int(epoch_start)) * len(train_loader)
+        args['total_epoch'] = (args['epoch_num'] - int(args['epoch_start'])) * len(train_loader)
     train_val(model, optimizer, logger, args, scaler, ema)
     test(model, args)
 
@@ -130,18 +104,19 @@ def main(args):
 def train_val(model, optimizer, logger, args, scaler=None, ema=None):
     train_loader_len, val_loader_len = len(args['train_loader']), len(args['val_loader'])
     train_loss_total_epochs, valid_loss_total_epochs = list(), list()
-    epoch_lr, epoch_iou, epoch_mpa = list(), list(), list()
+    epoch_lr, epoch_psnr, epoch_ssim = list(), list(), list()
     '''Train & val'''
-    best_iou, best_mpa = .01, .01
+    best_psnr, best_ssim = .01, .01
     best_epoch, last_index = 0, 0.
     filename = ""
-    curr_iter = 0
+    curr_iter = torch.load(args['best_ckpt'])['iter'] if args['Resume'] else 0
     for epoch in range(args['epoch_start'] + 1, args['epoch_start'] + 1 + args['epoch_num']):
         model.train()
         train_main_loss = AverageMeter()
         train_bar = tqdm(args['train_loader'], total=train_loader_len)
         # scheduler.step()  # when use stepLR\ExponentialLR
         for batch_idx, (image, label) in enumerate(train_bar, start=1):
+            loss = None
             if args['poly_train']:
                 if args['warmup']:
                     if epoch < args['warmup_epoch']:
@@ -163,31 +138,18 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
             image = image.to(device=device_ids[0], dtype=torch.float32, non_blocking=True)
             label = label.to(device=device_ids[0], dtype=torch.float32, non_blocking=True)
             if scaler is None:
-                predict_1, predict_2, predict_3, outputs = model(image)
-                loss_1 = bce_iou_loss(predict_1, label)
-                loss_2 = struct_Loss(predict_2, label)
-                loss_3 = struct_Loss(predict_3, label)
-                loss_4 = struct_Loss(outputs, label)
-                loss = 1 * loss_1 + 1 * loss_2 + 2 * loss_3 + 4 * loss_4
+                predict = model(image)
+                if batch_idx == train_loader_len - 1:
+                    tensor2img(predict, os.path.join(args['test_result'], str(epoch)+"_trainImage.jpg"))
+                predict = image - predict
+                loss = criterion(predict, image)
                 loss.backward()
                 optimizer.step()
-            else:
-                with autocast():
-                    predict_1, predict_2, predict_3, outputs = model(image)
-                    loss_1 = bce_iou_loss(predict_1, label)
-                    loss_2 = struct_Loss(predict_2, label)
-                    loss_3 = struct_Loss(predict_3, label)
-                    loss_4 = struct_Loss(outputs, label)
-                    loss = 1 * loss_1 + 1 * loss_2 + 2 * loss_3 + 4 * loss_4
-                scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
             if args['clip_grad']:  # use clip_grad
                 clip_grad_norm_(model.parameters(), max_norm=10, norm_type=2)
             if ema is not None:  # update EMA
                 ema.update(model)
             optimizer.zero_grad(set_to_none=True)
-
             train_main_loss.update(loss.cpu().detach().numpy())
             train_bar.set_description(desc='[train] epoch:{} iter:{}/{} lr:{:.4f} loss:{:.4f}'.format(
                 epoch, batch_idx, train_loader_len, optimizer.param_groups[-1]['lr'],
@@ -205,19 +167,14 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
         model.eval()
         val_bar = tqdm(args['val_loader'])
         val_loss = AverageMeter()
-        acc_meter = AverageMeter()
-        fwIoU_meter = AverageMeter()
-        mpa_meter = AverageMeter()
+        psnr_meter = AverageMeter()
+        ssim_meter = AverageMeter()
         with torch.no_grad():
             for batch_idx, (image, label) in enumerate(val_bar, start=1):
                 image = image.to(device=device_ids[0], dtype=torch.float32, non_blocking=True)
                 label = label.to(device=device_ids[0], dtype=torch.float32, non_blocking=True)
-                predict_1, predict_2, predict_3, predict_4 = model(image)
-                loss_1 = bce_iou_loss(predict_1, label)
-                loss_2 = struct_Loss(predict_2, label)
-                loss_3 = struct_Loss(predict_3, label)
-                loss_4 = struct_Loss(predict_4, label)
-                loss = 1 * loss_1 + 1 * loss_2 + 2 * loss_3 + 4 * loss_4
+                predict = model(image)
+                loss = criterion()
                 val_loss.update(loss.cpu().detach().numpy())
                 val_bar.set_description(desc='[val] epoch:{} iter:{}/{} loss:{:.4f}'.format(
                     epoch, batch_idx, val_loader_len, val_loss.average()))
@@ -225,44 +182,40 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
                     logger.info('[val] epoch:{} iter:{}/{} loss:{:.4f}'.format(
                         epoch, batch_idx, val_loader_len, val_loss.average()))
                 '''以下部分由于数据集的图片是二分类图像，故采用以下方式处理'''
-                outputs = predict_4
-                outputs = torch.where(outputs >= 0.5, torch.ones_like(outputs), torch.zeros_like(outputs))
                 # outputs = torch.argmax(outputs, dim=1)
-                outputs = outputs.cpu().detach().numpy()
-                for (output, target) in zip(outputs, label):
-                    acc = Precision(output, target.cpu(), num_classes=2, ignore_zero=False)
-                    mpa = mPA(output, target.cpu(), num_classes=2, ignore_zero=False)
-                    fwiou = FWIoU(output, target.cpu(), num_classes=2, ignore_zero=False)
-                    acc_meter.update(acc)
-                    mpa_meter.update(mpa)
-                    fwIoU_meter.update(fwiou)
+                outputs = predict.cpu().detach().numpy()
+                for (output, target) in zip(outputs, image):
+                    ssim = SSIM(output, target)
+                    psnr = PSNR(output, target)
+                    ssim_meter.update(ssim)
+                    psnr_meter.update(psnr)
         # save loss & lr
         train_loss_total_epochs.append(train_main_loss.average())
         valid_loss_total_epochs.append(val_loss.average())
         epoch_lr.append(optimizer.param_groups[-1]['lr'])
-        curr_iter += 1
+
         # save Model
-        if fwIoU_meter.average() > best_iou:
+        if psnr_meter.average() > best_psnr:
             model.cpu()
             """model.module.sate_dict() , just used for DataParallel, if no the setting, remove module"""
-            state = {'epoch': epoch, 'model': model.state_dict(), 'optimizer': optimizer.state_dict()}
+            state = {'epoch': epoch, 'model': model.state_dict(), 'optimizer': optimizer.state_dict(),
+                     'iter': curr_iter}
             if ema is not None:
                 state['model_ema'] = get_state_dict(ema)
             if exists(args['best_ckpt']):  # del old
                 os.remove(args['best_ckpt'])
             best_ckpt = join(args['ckpt_dir'],
-                             'best_epoch{:3d}_fwIoU{:.3f}.pth'.format(epoch, fwIoU_meter.average() * 100))
+                             'best_epoch{:3d}_fwIoU{:.3f}.pth'.format(epoch, psnr_meter.average() * 100))
             torch.save(state, best_ckpt, _use_new_zipfile_serialization=False)
-            best_iou = fwIoU_meter.average()
+            best_psnr = psnr_meter.average()
             best_epoch = epoch
             args['best_ckpt'] = best_ckpt
-            logger.info('[save] Best Model saved at epoch:{}, fwIou:{}, mPA:{}'.format(best_epoch, fwIoU_meter.average(
-
-            ), mpa_meter.average()))
+            logger.info('[save] Best Model saved at epoch:{}, fwIou:{}, mPA:{}'.format(best_epoch, psnr_meter.average(
+            ), ssim_meter.average()))
 
             if exists(filename):
                 os.remove(filename)
-            filename = join(args['ckpt_dir'], 'epoch{}_fwiou{:.3f}.pth'.format(epoch, fwIoU_meter.average() * 100))
+            filename = join(args['ckpt_dir'], 'epoch{}_fwiou{:.3f}.pth'.format(epoch, psnr_meter.average() * 100))
             torch.save(state, filename, _use_new_zipfile_serialization=False)
             model.cuda(device=device_ids[0])
 
@@ -273,21 +226,22 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
                 state['model_ema'] = get_state_dict(ema)
             if exists(filename):
                 os.remove(filename)
-            filename = join(args['ckpt_dir'], 'epoch{}_fwiou{:.3f}.pth'.format(epoch, fwIoU_meter.average() * 100))
+            filename = join(args['ckpt_dir'], 'epoch{}_fwiou{:.3f}.pth'.format(epoch, psnr_meter.average() * 100))
             torch.save(state, filename, _use_new_zipfile_serialization=False)
             model.cuda(device=device_ids[0])
-        if mpa_meter.average() > best_mpa:
-            best_mpa = mpa_meter.average()
-        epoch_iou.append(fwIoU_meter.average())
-        epoch_mpa.append(mpa_meter.average())
+        if ssim_meter.average() > best_ssim:
+            best_ssim = ssim_meter.average()
+        epoch_psnr.append(psnr_meter.average())
+        epoch_ssim.append(ssim_meter.average())
+        curr_iter += 1
         # 显示loss
-        logger.info("best_epoch:{}, nowIoU: {:.4f}, bestIoU:{:.4f}, now_mPA:{:.4f}, best_mPA:{:.4f}, now_acc:{:.4f}\n"
-                    .format(best_epoch, fwIoU_meter.average() * 100, best_iou * 100, mpa_meter.average() * 100,
-                            best_mpa * 100, acc_meter.average() * 100))
+        logger.info("best_epoch:{}, nowIoU: {:.4f}, bestIoU:{:.4f}, now_mPA:{:.4f}, best_mPA:{:.4f}\n"
+                    .format(best_epoch, psnr_meter.average() * 100, best_psnr * 100, ssim_meter.average() * 100,
+                            best_ssim * 100))
     indexSet = dict(
         learningRate=epoch_lr,
-        FwIoU=epoch_iou,
-        mPA=epoch_mpa
+        PSNR=epoch_psnr,
+        SSIM=epoch_ssim
     )
     if args['plot']:
         draw(args['epoch_num'], train_loss_total_epochs, valid_loss_total_epochs, indexSet, args['log_dir'])
@@ -341,19 +295,19 @@ def test(model, args):
 if __name__ == '__main__':
     args = dict(
         # model_name='resNet50_mixwise_PM_UP',
-        model_name='resNet50_mixwise_new',
+        model_name='resNet50_mixwise_PM_UP_original',
         backbone='resnet50',
         # backbone='swinT_base',
         backbone_path='./params/resnet/resnet50.pth',
         model_init=True,  # if backbone_path is None, Set False Please.
 
-        epoch_num=500,
+        epoch_num=100,
         training_batch_size=8,  # 以8为基数效果更佳
-        data_dir=r"dataset/MarineFarm_80",
+        data_dir=r"dataset/MarineFarm",
 
         epoch_start=0,
-        optimizer='sgd',  # choice: sgd, adam
-        lr=1e-3,
+        optimizer='adam',  # choice: sgd, adam
+        lr=1e-4,
         lr_decay=0.9,
         weight_decay=5e-4,
         momentum=0.9,
@@ -363,7 +317,7 @@ if __name__ == '__main__':
         warmup_lr=1e-4,
 
         save_inter=10,  # 用来存模型
-        Resume=False,  # used for discriminate the status from the breakpoint or start
+        Resume=True,  # used for discriminate the status from the breakpoint or start
         model_ema=False,  # if True, use Model Exponential Moving Average
         clip_grad=False,  # if True, gradient clip
         use_fp16=False,  # if True, Mixed Precision Training or AMP(Automatically Mixed Precision)

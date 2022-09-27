@@ -13,6 +13,8 @@ from os.path import join
 import cv2
 import numpy as np
 import torch
+import torchvision.utils
+from PIL import Image
 from pytorch_toolbelt.losses import JointLoss
 from segmentation_models_pytorch.losses import *
 from segmentation_models_pytorch.utils.losses import CrossEntropyLoss
@@ -38,12 +40,13 @@ def seed_torch(seed=2021):
     cudnn.deterministic = True
 
 
-def tensor2img(tensor):
-    image = tensor.squeeze(dim=0).cpu().numpy()
+def tensor2img(tensor: torch.Tensor, filename):
+    image = tensor.clone().squeeze(dim=0).detach().cpu().numpy()
     image = np.transpose(image, (1, 2, 0))
     image = image[:, :, ::-1]
     image = np.float32(image) / 255
-    return image
+    image = Image.fromarray(image)
+    image.save(filename)
 
 
 def save_hotmpas(img, epoch, idx, save_path):

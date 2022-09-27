@@ -187,13 +187,11 @@ def res2net101_v1b(pretrained=False, **kwargs):
 def res2net50_v1b_26w_4s(pretrained=False, **kwargs):
     """Constructs a Res2Net-50_v1b_26w_4s lib.
     Args:
-        pretrained (bool): If True, returns a lib pre-trained on ImageNet
+        pretrained (bool): If True, returns a lib pretrained on ImageNet
     """
     model = Res2Net(Bottle2neck, [3, 4, 6, 3], baseWidth=26, scale=4, **kwargs)
     if pretrained:
-        model_state = torch.load('/media/nercms/NERCMS/GepengJi/Medical_Seqmentation/CRANet/models/res2net50_v1b_26w_4s-3cf99910.pth')
-        model.load_state_dict(model_state)
-        # lib.load_state_dict(model_zoo.load_url(model_urls['res2net50_v1b_26w_4s']))
+        model.load_state_dict(model_zoo.load_url(model_urls['res2net50_v1b_26w_4s']))
     return model
 
 
