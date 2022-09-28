@@ -115,14 +115,17 @@ class MSDNet(nn.Module):
         super(MSDNet, self).__init__()
         self.estimate = NoiseEstimation(in_channels=channels)
         self.Unet = Unet(in_channels=channels, classes=channels)
-        self.relu = nn.ReLU(inplace=True)
+        self.relu = nn.Sequential(
+            nn.BatchNorm2d(channels),
+            nn.ReLU(inplace=True)
+        )
 
     def forward(self, x):
         est = self.estimate(x)
         mid_x = x + est
         result = self.Unet(mid_x)
-        result = self.relu(result)
         result = result + x
+        result = self.relu(result)
         return result
 
 

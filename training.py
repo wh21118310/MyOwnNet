@@ -305,6 +305,8 @@ def test(model, args):
         test_data_dir = os.path.join(args['data_dir'], 'test')
         test_data_images = os.path.join(test_data_dir, 'images')
         test_data_images = glob.glob(test_data_images + "/*.png")
+        if args['save_results']:
+            fig = plt.figure(figsize=(12, 5))
         for test_data_image in test_data_images:
             label = test_data_image.replace('images', 'gt')
             name = os.path.basename(test_data_image)
@@ -320,7 +322,6 @@ def test(model, args):
                 original_image = img
                 prediction = Image.fromarray(prediction).convert('L')
                 label = Image.open(label).convert('L')
-                fig = plt.figure(figsize=(12, 5))
                 fig.add_subplot(1, 3, 1)
                 plt.title('original')
                 plt.axis('off')
@@ -336,6 +337,8 @@ def test(model, args):
                 fig.tight_layout()
                 fig.subplots_adjust(left=None, bottom=None, right=None, top=None, wspace=None, hspace=None)  # 调整子图间距
                 fig.savefig(os.path.join(args['test_result'], name))
+                plt.clf()
+        plt.close(fig)
 
 
 if __name__ == '__main__':
@@ -349,7 +352,7 @@ if __name__ == '__main__':
 
         epoch_num=500,
         training_batch_size=8,  # 以8为基数效果更佳
-        data_dir=r"dataset/MarineFarm",
+        data_dir=r"dataset/MarineFarm_80",
 
         epoch_start=0,
         optimizer='sgd',  # choice: sgd, adam

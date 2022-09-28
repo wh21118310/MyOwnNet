@@ -44,7 +44,8 @@ def tensor2img(tensor: torch.Tensor, filename):
     image = tensor.clone().squeeze(dim=0).detach().cpu().numpy()
     image = np.transpose(image, (1, 2, 0))
     image = image[:, :, ::-1]
-    image = np.float32(image) / 255
+    image = np.float32(image)
+    image = np.uint8(image)
     image = Image.fromarray(image)
     image.save(filename)
 
@@ -345,4 +346,17 @@ def draw(Total_epoch, train_loss_total_epochs, valid_loss_total_epochs, epoch_in
     plt.savefig(logs_path + "./train_val.png")
     print("save plot in ", logs_path)
 
+def data_normal(orign_data):
+    d_min = orign_data.min()
+    if d_min < 0:
+        orign_data += torch.abs(d_min)
+        d_min = orign_data.min()
+    d_max = orign_data.max()
+    dst = d_max - d_min
+    norm_data = (orign_data - d_min).true_divide(dst)
+    return norm_data
 
+if __name__ == '__main__':
+    x = torch.randn((3, 256, 256))
+    result = data_normal(x)
+    print(result)

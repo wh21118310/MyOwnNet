@@ -12,7 +12,6 @@ import os.path
 from os.path import exists
 
 from skimage.metrics import peak_signal_noise_ratio as PSNR
-from skimage.metrics import structural_similarity as SSIM
 import matplotlib.pyplot as plt
 from PIL import Image
 from timm.utils import get_state_dict
@@ -26,7 +25,7 @@ from utils.arguments import *
 from utils.data_process import weights_init, ImageFolder
 from utils.get_metric import FWIoU, mPA, Precision
 from utils.transform import joint_transform, img_transform, target_transform, to_pil
-
+from pytorch_msssim import SSIM
 '''Config Information'''
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
@@ -36,7 +35,7 @@ device_ids = [0]  # 设定可用的GPU
 
 '''Loading criterion'''
 criterion = MSELoss()
-
+ssim = SSIM(data_range=1.0, size_average=True, channel=3)
 
 def main(args):
     """Path Settings"""
@@ -139,12 +138,13 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
             label = label.to(device=device_ids[0], dtype=torch.float32, non_blocking=True)
             if scaler is None:
                 predict = model(image)
-                if batch_idx == train_loader_len - 1:
-                    tensor2img(predict, os.path.join(args['test_result'], str(epoch)+"_trainImage.jpg"))
                 predict = image - predict
                 loss = criterion(predict, image)
                 loss.backward()
                 optimizer.step()
+                if batch_idx == train_loader_len - 1:
+                    mid_out = data_normal(predict) * 255
+                    tensor2img(mid_out, os.path.join(args['test_result'], str(epoch)+"_trainImage.jpg"))
             if args['clip_grad']:  # use clip_grad
                 clip_grad_norm_(model.parameters(), max_norm=10, norm_type=2)
             if ema is not None:  # update EMA
@@ -174,7 +174,8 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
                 image = image.to(device=device_ids[0], dtype=torch.float32, non_blocking=True)
                 label = label.to(device=device_ids[0], dtype=torch.float32, non_blocking=True)
                 predict = model(image)
-                loss = criterion()
+                predict1 = image - predict
+                loss = criterion(predict1, image)
                 val_loss.update(loss.cpu().detach().numpy())
                 val_bar.set_description(desc='[val] epoch:{} iter:{}/{} loss:{:.4f}'.format(
                     epoch, batch_idx, val_loader_len, val_loss.average()))
@@ -183,11 +184,13 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
                         epoch, batch_idx, val_loader_len, val_loss.average()))
                 '''以下部分由于数据集的图片是二分类图像，故采用以下方式处理'''
                 # outputs = torch.argmax(outputs, dim=1)
-                outputs = predict.cpu().detach().numpy()
-                for (output, target) in zip(outputs, image):
-                    ssim = SSIM(output, target)
+                outputs, image = data_normal(predict1), data_normal(image)
+                outputs, targets = outputs.cpu().detach(), image.cpu().detach()
+                sim = ssim(outputs, targets)
+                ssim_meter.update(sim)
+                for (output, target) in zip(outputs, targets):
+                    output, target = output.numpy()+1e-8, target.numpy()+1e-8
                     psnr = PSNR(output, target)
-                    ssim_meter.update(ssim)
                     psnr_meter.update(psnr)
         # save loss & lr
         train_loss_total_epochs.append(train_main_loss.average())
@@ -205,17 +208,17 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
             if exists(args['best_ckpt']):  # del old
                 os.remove(args['best_ckpt'])
             best_ckpt = join(args['ckpt_dir'],
-                             'best_epoch{:3d}_fwIoU{:.3f}.pth'.format(epoch, psnr_meter.average() * 100))
+                             'best_epoch{:3d}_PSNR{:.3f}.pth'.format(epoch, psnr_meter.average()))
             torch.save(state, best_ckpt, _use_new_zipfile_serialization=False)
             best_psnr = psnr_meter.average()
             best_epoch = epoch
             args['best_ckpt'] = best_ckpt
-            logger.info('[save] Best Model saved at epoch:{}, fwIou:{}, mPA:{}'.format(best_epoch, psnr_meter.average(
+            logger.info('[save] Best Model saved at epoch:{}, PSNR:{}, SSIM:{}'.format(best_epoch, psnr_meter.average(
             ), ssim_meter.average()))
 
             if exists(filename):
                 os.remove(filename)
-            filename = join(args['ckpt_dir'], 'epoch{}_fwiou{:.3f}.pth'.format(epoch, psnr_meter.average() * 100))
+            filename = join(args['ckpt_dir'], 'epoch{}_PSNR{:.3f}.pth'.format(epoch, psnr_meter.average()))
             torch.save(state, filename, _use_new_zipfile_serialization=False)
             model.cuda(device=device_ids[0])
 
@@ -226,7 +229,7 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
                 state['model_ema'] = get_state_dict(ema)
             if exists(filename):
                 os.remove(filename)
-            filename = join(args['ckpt_dir'], 'epoch{}_fwiou{:.3f}.pth'.format(epoch, psnr_meter.average() * 100))
+            filename = join(args['ckpt_dir'], 'epoch{}_PSNR{:.3f}.pth'.format(epoch, psnr_meter.average()))
             torch.save(state, filename, _use_new_zipfile_serialization=False)
             model.cuda(device=device_ids[0])
         if ssim_meter.average() > best_ssim:
@@ -235,13 +238,13 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
         epoch_ssim.append(ssim_meter.average())
         curr_iter += 1
         # 显示loss
-        logger.info("best_epoch:{}, nowIoU: {:.4f}, bestIoU:{:.4f}, now_mPA:{:.4f}, best_mPA:{:.4f}\n"
-                    .format(best_epoch, psnr_meter.average() * 100, best_psnr * 100, ssim_meter.average() * 100,
-                            best_ssim * 100))
+        logger.info("best_epoch:{}, nowPSNR: {:.4f}, bestPSNR:{:.4f}, now_SSIM:{:.4f}, best_SSIM:{:.4f}\n"
+                    .format(best_epoch, psnr_meter.average(), best_psnr, ssim_meter.average(),
+                            best_ssim))
     indexSet = dict(
         learningRate=epoch_lr,
-        PSNR=epoch_psnr,
-        SSIM=epoch_ssim
+        FwIoU=epoch_psnr,  # PSNR
+        mPA=epoch_ssim  # SSIM
     )
     if args['plot']:
         draw(args['epoch_num'], train_loss_total_epochs, valid_loss_total_epochs, indexSet, args['log_dir'])
@@ -259,12 +262,14 @@ def test(model, args):
         test_data_dir = os.path.join(args['data_dir'], 'test')
         test_data_images = os.path.join(test_data_dir, 'images')
         test_data_images = glob.glob(test_data_images + "/*.png")
+        if args['save_results']:
+            fig = plt.figure(figsize=(12, 5))
         for test_data_image in test_data_images:
             label = test_data_image.replace('images', 'gt')
             name = os.path.basename(test_data_image)
             img = Image.open(test_data_image).convert('RGB')
             img_var = Variable(img_transform(img).unsqueeze(0)).cuda(device_ids[0])
-            _, _, _, prediction = model(img_var)
+            prediction = model(img_var)
             prediction = np.array(to_pil(prediction.data.squeeze(0).cpu()))
             if np.max(prediction) > 1:
                 prediction = prediction / 255
@@ -274,7 +279,6 @@ def test(model, args):
                 original_image = img
                 prediction = Image.fromarray(prediction).convert('L')
                 label = Image.open(label).convert('L')
-                fig = plt.figure(figsize=(12, 5))
                 fig.add_subplot(1, 3, 1)
                 plt.title('original')
                 plt.axis('off')
@@ -290,20 +294,22 @@ def test(model, args):
                 fig.tight_layout()
                 fig.subplots_adjust(left=None, bottom=None, right=None, top=None, wspace=None, hspace=None)  # 调整子图间距
                 fig.savefig(os.path.join(args['test_result'], name))
+                plt.clf()
+        plt.close(fig)
 
 
 if __name__ == '__main__':
     args = dict(
         # model_name='resNet50_mixwise_PM_UP',
-        model_name='resNet50_mixwise_PM_UP_original',
+        model_name='MSDNet',
         backbone='resnet50',
         # backbone='swinT_base',
         backbone_path='./params/resnet/resnet50.pth',
         model_init=True,  # if backbone_path is None, Set False Please.
 
         epoch_num=100,
-        training_batch_size=8,  # 以8为基数效果更佳
-        data_dir=r"dataset/MarineFarm",
+        training_batch_size=1,  # 以8为基数效果更佳
+        data_dir=r"dataset/MarineFarm_80",
 
         epoch_start=0,
         optimizer='adam',  # choice: sgd, adam
@@ -317,7 +323,7 @@ if __name__ == '__main__':
         warmup_lr=1e-4,
 
         save_inter=10,  # 用来存模型
-        Resume=True,  # used for discriminate the status from the breakpoint or start
+        Resume=False,  # used for discriminate the status from the breakpoint or start
         model_ema=False,  # if True, use Model Exponential Moving Average
         clip_grad=False,  # if True, gradient clip
         use_fp16=False,  # if True, Mixed Precision Training or AMP(Automatically Mixed Precision)
