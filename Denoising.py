@@ -142,7 +142,7 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
                 loss = criterion(predict, image)
                 loss.backward()
                 optimizer.step()
-                if batch_idx == train_loader_len - 1:
+                if batch_idx == 1:
                     mid_out = data_normal(predict) * 255
                     tensor2img(mid_out, os.path.join(args['test_result'], str(epoch)+"_trainImage.jpg"))
             if args['clip_grad']:  # use clip_grad
@@ -174,8 +174,8 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
                 image = image.to(device=device_ids[0], dtype=torch.float32, non_blocking=True)
                 label = label.to(device=device_ids[0], dtype=torch.float32, non_blocking=True)
                 predict = model(image)
-                predict1 = image - predict
-                loss = criterion(predict1, image)
+                predict = image - predict
+                loss = criterion(predict, image)
                 val_loss.update(loss.cpu().detach().numpy())
                 val_bar.set_description(desc='[val] epoch:{} iter:{}/{} loss:{:.4f}'.format(
                     epoch, batch_idx, val_loader_len, val_loss.average()))
@@ -184,8 +184,8 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
                         epoch, batch_idx, val_loader_len, val_loss.average()))
                 '''以下部分由于数据集的图片是二分类图像，故采用以下方式处理'''
                 # outputs = torch.argmax(outputs, dim=1)
-                outputs, image = data_normal(predict1), data_normal(image)
-                outputs, targets = outputs.cpu().detach(), image.cpu().detach()
+                outputs = data_normal(predict)
+                outputs, targets = outputs.cpu().detach() + 1e-8, image.cpu().detach() + 1e-8
                 sim = ssim(outputs, targets)
                 ssim_meter.update(sim)
                 for (output, target) in zip(outputs, targets):
@@ -270,6 +270,7 @@ def test(model, args):
             img = Image.open(test_data_image).convert('RGB')
             img_var = Variable(img_transform(img).unsqueeze(0)).cuda(device_ids[0])
             prediction = model(img_var)
+            prediction = data_normal(prediction)
             prediction = np.array(to_pil(prediction.data.squeeze(0).cpu()))
             if np.max(prediction) > 1:
                 prediction = prediction / 255
@@ -307,7 +308,7 @@ if __name__ == '__main__':
         backbone_path='./params/resnet/resnet50.pth',
         model_init=True,  # if backbone_path is None, Set False Please.
 
-        epoch_num=100,
+        epoch_num=50,
         training_batch_size=1,  # 以8为基数效果更佳
         data_dir=r"dataset/MarineFarm_80",
 
