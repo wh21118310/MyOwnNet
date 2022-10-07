@@ -98,11 +98,12 @@ def main(args):
     # ------------------------------------------------------------------#
     # num_workers用于设置是否使用多线程读取数据，1代表关闭多线程。开启后会加快数据读取速度，但是会占用更多内存。
     # Windows只可设定为0
+    # prefetch_factor: 预读batch量，计算公式为prefetch_factor*num_workers,默认为2
     # ------------------------------------------------------------------#
     train_loader = DataLoader(train_data, shuffle=True, batch_size=args["training_batch_size"], num_workers=0,
-                              pin_memory=True)
+                              pin_memory=True, prefetch_factor=2)
     val_loader = DataLoader(val_data, shuffle=True, batch_size=args["training_batch_size"], num_workers=0,
-                            pin_memory=True)
+                            pin_memory=True, prefetch_factor=2)
     args['train_loader'] = train_loader
     args['val_loader'] = val_loader
     args['total_epoch'] = args['epoch_num'] * len(train_loader)
@@ -289,7 +290,7 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
         FwIoU=epoch_iou,
         mPA=epoch_mpa
     )
-    if args['plot']:
+    if args['plot']: # 画图
         draw(args['epoch_num'], train_loss_total_epochs, valid_loss_total_epochs, indexSet, args['log_dir'])
 
 
