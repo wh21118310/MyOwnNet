@@ -12,9 +12,9 @@ from torch import nn
 
 
 class GenClean(nn.Module):
-    def __init__(self, channels=3, numLayers=17):
+    def __init__(self, channels=3, numLayers=17, features=64):
         super(GenClean, self).__init__()
-        kernel, padding, features = 3, 1, 64
+        kernel, padding = 3, 1
         layers = list()
         layers.append(nn.Conv2d(in_channels=channels, out_channels=features, kernel_size=kernel, padding=padding))
         layers.append(nn.ReLU(inplace=True))
@@ -35,10 +35,10 @@ class GenClean(nn.Module):
 
 
 class GenNoise(nn.Module):
-    def __init__(self, NLayer=10, Fsize=64):
+    def __init__(self, NLayer=10, Fsize=64, channels=3):
         super(GenNoise, self).__init__()
         kernel, padding = 3, 1
-        m = [nn.Conv2d(3, Fsize, kernel_size=kernel, padding=padding),
+        m = [nn.Conv2d(channels, Fsize, kernel_size=kernel, padding=padding),
              nn.ReLU(inplace=True)]
         for i in range(NLayer - 1):
             m.append(nn.Conv2d(Fsize, Fsize, kernel_size=kernel, padding=padding))

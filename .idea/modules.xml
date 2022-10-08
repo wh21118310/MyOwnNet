@@ -3,6 +3,7 @@
   <component name="ProjectModuleManager">
     <modules>
       <module fileurl="file://E:/Document/project_airport/.idea/.idea/.idea.iml" filepath="E:/Document/project_airport/.idea/.idea/.idea.iml" />
+      <module fileurl="file://D:/Document/CVF-SID_PyTorch-main/.idea/CVF-SID_PyTorch-main.iml" filepath="D:/Document/CVF-SID_PyTorch-main/.idea/CVF-SID_PyTorch-main.iml" />
       <module fileurl="file://$PROJECT_DIR$/.idea/MyOwnNet.iml" filepath="$PROJECT_DIR$/.idea/MyOwnNet.iml" />
       <module fileurl="file://E:/Document/network/.idea/network.iml" filepath="E:/Document/network/.idea/network.iml" />
     </modules>

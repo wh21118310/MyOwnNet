@@ -6,6 +6,7 @@
     <orderEntry type="sourceFolder" forTests="false" />
     <orderEntry type="module" module-name="network" />
     <orderEntry type="module" module-name=".idea" />
+    <orderEntry type="module" module-name="CVF-SID_PyTorch-main" />
   </component>
   <component name="PackageRequirementsSettings">
     <option name="requirementsPath" value="" />

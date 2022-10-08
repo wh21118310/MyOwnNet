@@ -192,7 +192,7 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
             train_bar.set_description(desc='[train] epoch:{} iter:{}/{} lr:{:.4f} loss:{:.4f}'.format(
                 epoch, batch_idx, train_loader_len, optimizer.param_groups[-1]['lr'],
                 train_main_loss.average()))
-            if batch_idx == train_loader_len:
+            if batch_idx == train_loader_len and epoch % args['log_print_inter'] == 0:
                 logger.info('[train] epoch:{} iter:{}/{} lr:{:.4f} loss:{:.4f}'.format(
                     epoch, batch_idx, train_loader_len, optimizer.param_groups[-1]['lr'],
                     train_main_loss.average()))
@@ -221,7 +221,7 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
                 val_loss.update(loss.cpu().detach().numpy())
                 val_bar.set_description(desc='[val] epoch:{} iter:{}/{} loss:{:.4f}'.format(
                     epoch, batch_idx, val_loader_len, val_loss.average()))
-                if batch_idx == val_loader_len:
+                if batch_idx == val_loader_len and epoch % args['log_print_inter'] == 0:
                     logger.info('[val] epoch:{} iter:{}/{} loss:{:.4f}'.format(
                         epoch, batch_idx, val_loader_len, val_loss.average()))
                 '''以下部分由于数据集的图片是二分类图像，故采用以下方式处理'''
@@ -245,7 +245,8 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
         if fwIoU_meter.average() > best_iou:
             model.cpu()
             """model.module.sate_dict() , just used for DataParallel, if no the setting, remove module"""
-            state = {'epoch': epoch, 'model': model.state_dict(), 'optimizer': optimizer.state_dict(), 'iter': curr_iter}
+            state = {'epoch': epoch, 'model': model.state_dict(), 'optimizer': optimizer.state_dict(),
+                     'iter': curr_iter}
             if ema is not None:
                 state['model_ema'] = get_state_dict(ema)
             if exists(args['best_ckpt']):  # del old
@@ -282,15 +283,16 @@ def train_val(model, optimizer, logger, args, scaler=None, ema=None):
         epoch_mpa.append(mpa_meter.average())
         curr_iter += 1
         # 显示loss
-        logger.info("best_epoch:{}, nowIoU: {:.4f}, bestIoU:{:.4f}, now_mPA:{:.4f}, best_mPA:{:.4f}, now_acc:{:.4f}\n"
-                    .format(best_epoch, fwIoU_meter.average() * 100, best_iou * 100, mpa_meter.average() * 100,
-                            best_mpa * 100, acc_meter.average() * 100))
+        if epoch % args['log_print_inter'] == 0:
+            logger.info("best_epoch:{}, nowIoU: {:.4f}, bestIoU:{:.4f}, now_mPA:{:.4f}, best_mPA:{:.4f}, "
+                        "now_acc:{:.4f}\n".format(best_epoch, fwIoU_meter.average() * 100, best_iou * 100,
+                                                  mpa_meter.average() * 100, best_mpa * 100, acc_meter.average() * 100))
     indexSet = dict(
         learningRate=epoch_lr,
         FwIoU=epoch_iou,
         mPA=epoch_mpa
     )
-    if args['plot']: # 画图
+    if args['plot']:  # 画图
         draw(args['epoch_num'], train_loss_total_epochs, valid_loss_total_epochs, indexSet, args['log_dir'])
 
 
@@ -366,6 +368,7 @@ if __name__ == '__main__':
         warmup_epoch=50,
         warmup_lr=1e-4,
 
+        log_print_inter=10,  # 日志打印间隔
         save_inter=10,  # 用来存模型
         Resume=True,  # used for discriminate the status from the breakpoint or start
         model_ema=False,  # if True, use Model Exponential Moving Average
